@@ -475,6 +475,37 @@ public sealed class VirtualFileSystem
             .Select(kv => (kv.Key, kv.Value, _autoSaveMounts.Contains(kv.Key)))
             .ToArray();
 
+    // ?? Import ?????????????????????????????????????????????????????
+
+    /// <summary>
+    /// Import a file from the host filesystem into the VFS.
+    /// Returns true on success, false on failure (error printed to console).
+    /// </summary>
+    public bool ImportFromHost(string hostPath, string vfsPath, int ownerId, int groupId)
+    {
+        vfsPath = NormalizePath(vfsPath);
+
+        byte[] data;
+        try
+        {
+            data = File.ReadAllBytes(hostPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"importfile: {hostPath}: {ex.Message}");
+            return false;
+        }
+
+        EnsureParentExists(vfsPath);
+        var node = new VfsNode(vfsPath, false, ownerId, groupId, "rw-r--r--")
+        {
+            Data = data
+        };
+        _nodes[vfsPath] = node;
+        AutoSaveIfMounted(vfsPath);
+        return true;
+    }
+
     // ?? Export ?????????????????????????????????????????????????????
 
     /// <summary>
