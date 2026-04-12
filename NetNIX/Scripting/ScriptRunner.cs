@@ -133,6 +133,10 @@ public sealed class ScriptRunner
         // Preprocess #include directives — merge library sources into the script
         source = PreprocessIncludes(source, cwd, label);
 
+        // Security: reject scripts that attempt to bypass the sandbox
+        if (!PassesSecurityScan(source, label))
+            return;
+
         int hash = source.GetHashCode();
 
         if (!_cache.TryGetValue(hash, out var assembly))
@@ -315,19 +319,253 @@ public sealed class ScriptRunner
         return null;
     }
 
+    // ?? Security ????????????????????????????????????????????????????
+
+    /// <summary>
+    /// The default content installed to /etc/sandbox.conf during first-run setup.
+    /// Root (or sudo) users can edit this file to add or remove rules.
+    /// Lines starting with # are comments.  Blank lines are ignored.
+    /// 
+    /// [blocked_usings]   — namespace prefixes checked against 'using' directives.
+    ///                      "using System.IO;" is blocked if "System.IO" is listed.
+    /// [blocked_tokens]   — literal strings searched for anywhere in the source.
+    ///                      Catches short names like "File." after a using import.
+    /// </summary>
+    public const string DefaultSandboxConfig = """
+        # /etc/sandbox.conf — NetNIX script sandbox configuration
+        # Managed by root. Changes take effect on the next script run.
+        #
+        # [blocked_usings]  — blocks 'using' directives that start with these prefixes.
+        # [blocked_tokens]  — blocks scripts containing these literal strings.
+        #
+        # To unblock something, comment it out with # or remove the line.
+        # To add a new rule, add a line under the appropriate section.
+
+        [blocked_usings]
+        System.IO
+        System.Diagnostics
+        System.Net
+        System.Reflection
+        System.Runtime.Loader
+        System.Runtime.InteropServices
+        System.Security
+        System.CodeDom
+
+        [blocked_tokens]
+        # Host filesystem — short names reachable after 'using System.IO'
+        File.Create
+        File.Open
+        File.Read
+        File.Write
+        File.Copy
+        File.Move
+        File.Delete
+        File.Exists
+        File.AppendAll
+        File.WriteAll
+        File.ReadAll
+        File.OpenRead
+        File.OpenWrite
+        File.OpenText
+        File.CreateText
+        Directory.Create
+        Directory.Delete
+        Directory.Exists
+        Directory.Move
+        Directory.GetFiles
+        Directory.GetDirectories
+        Directory.EnumerateFiles
+        Directory.EnumerateDirectories
+        DirectoryInfo(
+        FileInfo(
+        FileStream(
+        StreamReader(
+        StreamWriter(
+        DriveInfo.
+        Path.Combine
+        Path.GetTempPath
+        Path.GetFullPath
+        # Process spawning
+        Process.Start
+        ProcessStartInfo(
+        # Network (must use api.Net)
+        HttpClient(
+        WebClient(
+        TcpClient(
+        UdpClient(
+        Socket(
+        # Reflection / assembly loading
+        Assembly.Load
+        Assembly.UnsafeLoad
+        Activator.CreateInstance
+        GetField(
+        GetProperty(
+        GetMethod(
+        BindingFlags.
+        Type.GetType(
+        AssemblyLoadContext
+        # Unsafe / interop
+        DllImport
+        Marshal.
+        # Environment manipulation
+        Environment.Exit
+        Environment.SetEnvironmentVariable
+        Environment.CurrentDirectory
+        Environment.GetFolderPath
+        """;
+
+    /// <summary>
+    /// Loads and parses /etc/sandbox.conf from the VFS.
+    /// Returns two lists: blocked using prefixes and blocked source tokens.
+    /// </summary>
+    private (List<string> blockedUsings, List<string> blockedTokens) LoadSandboxConfig()
+    {
+        var blockedUsings = new List<string>();
+        var blockedTokens = new List<string>();
+
+        const string configPath = "/etc/sandbox.conf";
+        if (!_fs.IsFile(configPath))
+            return (blockedUsings, blockedTokens);
+
+        string content = Encoding.UTF8.GetString(_fs.ReadFile(configPath));
+        string currentSection = "";
+
+        foreach (var rawLine in content.Split('\n'))
+        {
+            string line = rawLine.Trim().TrimEnd('\r');
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                currentSection = line[1..^1].Trim().ToLowerInvariant();
+                continue;
+            }
+
+            switch (currentSection)
+            {
+                case "blocked_usings":
+                    blockedUsings.Add(line);
+                    break;
+                case "blocked_tokens":
+                    blockedTokens.Add(line);
+                    break;
+            }
+        }
+
+        return (blockedUsings, blockedTokens);
+    }
+
+    /// <summary>
+    /// Scans the preprocessed script source against the sandbox config.
+    /// Checks 'using' directives against blocked namespace prefixes and
+    /// scans the full source for blocked token strings.
+    /// Returns true if the source is safe, false if blocked.
+    /// </summary>
+    private bool PassesSecurityScan(string source, string label)
+    {
+        var (blockedUsings, blockedTokens) = LoadSandboxConfig();
+
+        // Extract using directives from source
+        foreach (var rawLine in source.Split('\n'))
+        {
+            string line = rawLine.Trim().TrimEnd('\r');
+            // Match "using X.Y.Z;" but not "using (" or "using var"
+            if (line.StartsWith("using ") && line.EndsWith(";") &&
+                !line.StartsWith("using (") && !line.StartsWith("using var "))
+            {
+                // Extract the namespace: "using System.IO;" -> "System.IO"
+                string ns = line["using ".Length..^1].Trim();
+
+                foreach (var blocked in blockedUsings)
+                {
+                    if (ns.Equals(blocked, StringComparison.Ordinal) ||
+                        ns.StartsWith(blocked + ".", StringComparison.Ordinal))
+                    {
+                        Console.WriteLine($"nsh: {label}: blocked — 'using {ns}' is not permitted");
+                        Console.WriteLine($"  Namespace '{blocked}' is blocked by /etc/sandbox.conf");
+                        Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
+                        Console.WriteLine("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Scan full source for blocked tokens
+        foreach (var token in blockedTokens)
+        {
+            if (source.Contains(token, StringComparison.Ordinal))
+            {
+                Console.WriteLine($"nsh: {label}: blocked — use of '{token}' is not permitted");
+                Console.WriteLine("  This pattern is blocked by /etc/sandbox.conf");
+                Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
+                Console.WriteLine("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Allowlist of assembly names that scripts are permitted to reference.
+    // This prevents user scripts from accessing the host filesystem, network,
+    // process spawning, reflection, or other dangerous APIs directly.
+    // All host interaction must go through the NixApi surface.
+    private static readonly HashSet<string> AllowedAssemblies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Core runtime (primitive types, object, string, arrays, etc.)
+        "System.Runtime",
+        "System.Private.CoreLib",
+
+        // Console I/O (Console.WriteLine, etc.)
+        "System.Console",
+
+        // Collections (List<T>, Dictionary<K,V>, HashSet<T>, etc.)
+        "System.Collections",
+        "System.Collections.Immutable",
+        "System.Collections.Concurrent",
+
+        // LINQ
+        "System.Linq",
+        "System.Linq.Expressions",
+
+        // Text (StringBuilder, Encoding, Regex)
+        "System.Text.RegularExpressions",
+        "System.Text.Encoding.Extensions",
+
+        // Math / numerics
+        "System.Numerics.Vectors",
+        "System.Runtime.Numerics",
+
+        // Basic utilities
+        "System.ComponentModel.Primitives",
+        "System.ObjectModel",
+        "System.Memory",
+        "System.Buffers",
+        "System.Threading",
+
+        // Required for compilation plumbing
+        "netstandard",
+        "System.Runtime.Extensions",
+        "System.Runtime.InteropServices",
+    };
+
     private static Assembly? Compile(string source, string label)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
 
-        // Gather references from the current runtime
+        // Gather references — only safe assemblies from the allowlist
         var references = new List<MetadataReference>();
 
-        // Core runtime assemblies
         var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
 
         foreach (var asmPath in trustedAssemblies)
         {
+            string name = Path.GetFileNameWithoutExtension(asmPath);
+            if (!AllowedAssemblies.Contains(name))
+                continue;
             try { references.Add(MetadataReference.CreateFromFile(asmPath)); }
             catch { /* skip unavailable */ }
         }

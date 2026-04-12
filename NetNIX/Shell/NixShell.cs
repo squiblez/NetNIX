@@ -214,6 +214,7 @@ public sealed class NixShell
             man editor          Text editor guide
             man filesystem      Filesystem hierarchy
             man permissions     File permission system
+            man sandbox         Script sandbox security (/etc/sandbox.conf)
             man nshrc           Shell startup scripts
 
           Shell scripts:

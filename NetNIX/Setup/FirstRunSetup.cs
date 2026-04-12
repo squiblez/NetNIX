@@ -79,6 +79,11 @@ public static class FirstRunSetup
         var motd = "Welcome to NetNIX — a .NET powered multi-user UNIX environment.\n"u8.ToArray();
         fs.CreateFile("/etc/motd", 0, 0, motd, "rw-r--r--");
 
+        // 5b. Install sandbox configuration (root-editable script security rules)
+        Console.WriteLine("[*] Installing sandbox configuration...");
+        var sandboxData = System.Text.Encoding.UTF8.GetBytes(NetNIX.Scripting.ScriptRunner.DefaultSandboxConfig);
+        fs.CreateFile("/etc/sandbox.conf", 0, 0, sandboxData, "rw-r-----");
+
         // 6. Install built-in script commands
         Console.WriteLine("[*] Installing built-in commands...");
         InstallBuiltinScripts(fs);
@@ -447,6 +452,7 @@ public static class FirstRunSetup
             ["editor"]      = HelpPages.EditorGuide,
             ["filesystem"]  = HelpPages.FilesystemGuide,
             ["permissions"] = HelpPages.PermissionsGuide,
+            ["sandbox"]     = HelpPages.Sandbox,
         };
 
         foreach (var (name, content) in pages)
