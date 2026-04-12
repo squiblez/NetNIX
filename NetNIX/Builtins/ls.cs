@@ -8,8 +8,8 @@ public static class LsCommand
     {
         var argList = args.ToList();
 
-        bool longFormat = argList.Remove("-l") | argList.Remove("-la") | argList.Remove("-al");
-        bool showAll = argList.Remove("-a") || longFormat;
+        bool showAll = argList.Remove("-a") | argList.Remove("-la") | argList.Remove("-al");
+        bool longFormat = showAll || argList.Remove("-l");
 
         string target = argList.Count > 0 ? argList[0] : ".";
         string resolved = api.ResolvePath(target);

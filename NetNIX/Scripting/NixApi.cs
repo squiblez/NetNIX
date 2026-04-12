@@ -453,6 +453,50 @@ public sealed class NixApi
             .ToArray();
     }
 
+    // ?? Mount / Unmount ????????????????????????????????????????????
+
+    /// <summary>
+    /// Mount a zip archive from the host filesystem into the VFS.
+    /// Mounted content is not saved to the rootfs.
+    /// If <paramref name="autoSave"/> is true, any mutation under the mount
+    /// point is automatically written back to the host zip.
+    /// Root only.
+    /// </summary>
+    public int MountZip(string hostPath, string mountPoint, bool autoSave = false)
+    {
+        RequireRoot("mount");
+        string resolvedMount = ResolvePath(mountPoint);
+        return _fs.MountZip(hostPath, resolvedMount, Uid, Gid, autoSave);
+    }
+
+    /// <summary>
+    /// Unmount a previously mounted archive. Root only.
+    /// If <paramref name="saveChanges"/> is true, writes modified content
+    /// back to the original host zip before unmounting.
+    /// </summary>
+    public void Unmount(string mountPoint, bool saveChanges = false)
+    {
+        RequireRoot("umount");
+        string resolvedMount = ResolvePath(mountPoint);
+        _fs.Unmount(resolvedMount, saveChanges);
+    }
+
+    /// <summary>
+    /// Save all current content under a mount point back to the original
+    /// host zip archive. Root only.
+    /// </summary>
+    public void SaveMount(string mountPoint)
+    {
+        RequireRoot("mount");
+        string resolvedMount = ResolvePath(mountPoint);
+        _fs.SaveMount(resolvedMount);
+    }
+
+    /// <summary>
+    /// Returns all active mount points, their host zip paths, and auto-save status.
+    /// </summary>
+    public (string mountPoint, string hostPath, bool autoSave)[] GetMountPoints() => _fs.GetMountPoints();
+
     // ?? Save ???????????????????????????????????????????????????????
 
     public void Save() => _fs.Save();

@@ -11,6 +11,8 @@ public sealed class VirtualFileSystem
 {
     private readonly string _archivePath;
     private readonly Dictionary<string, VfsNode> _nodes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _mountPoints = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _autoSaveMounts = new(StringComparer.Ordinal);
 
     public VirtualFileSystem(string archivePath)
     {
@@ -89,6 +91,9 @@ public sealed class VirtualFileSystem
         {
             if (path == "/") continue; // root is implicit
 
+            // Skip nodes that belong to a mounted archive (transient)
+            if (IsMounted(path)) continue;
+
             string entryName = path.TrimStart('/');
 
             if (node.IsDirectory)
@@ -154,6 +159,21 @@ public sealed class VirtualFileSystem
 
     // ?? Mutation ???????????????????????????????????????????????????
 
+    /// <summary>
+    /// If the given path falls under an auto-save mount, save that mount.
+    /// </summary>
+    private void AutoSaveIfMounted(string normalizedPath)
+    {
+        foreach (var mp in _autoSaveMounts)
+        {
+            if (normalizedPath == mp || normalizedPath.StartsWith(mp + "/"))
+            {
+                SaveMount(mp);
+                return;
+            }
+        }
+    }
+
     public VfsNode CreateDirectory(string path, int ownerId, int groupId, string permissions = "rwxr-xr-x")
     {
         path = NormalizePath(path);
@@ -164,6 +184,7 @@ public sealed class VirtualFileSystem
 
         var node = new VfsNode(path, true, ownerId, groupId, permissions);
         _nodes[path] = node;
+        AutoSaveIfMounted(path);
         return node;
     }
 
@@ -177,6 +198,7 @@ public sealed class VirtualFileSystem
             Data = data
         };
         _nodes[path] = node;
+        AutoSaveIfMounted(path);
         return node;
     }
 
@@ -186,6 +208,7 @@ public sealed class VirtualFileSystem
         if (!_nodes.TryGetValue(path, out var node) || node.IsDirectory)
             throw new IOException($"Not a file: {path}");
         node.Data = data;
+        AutoSaveIfMounted(path);
     }
 
     public byte[] ReadFile(string path)
@@ -207,6 +230,7 @@ public sealed class VirtualFileSystem
         var toRemove = _nodes.Keys.Where(k => k == path || k.StartsWith(path + "/")).ToList();
         foreach (var k in toRemove)
             _nodes.Remove(k);
+        AutoSaveIfMounted(path);
     }
 
     public void Move(string src, string dest)
@@ -233,6 +257,8 @@ public sealed class VirtualFileSystem
 
         foreach (var (_, node) in movedPairs)
             _nodes[node.Path] = node;
+        AutoSaveIfMounted(src);
+        AutoSaveIfMounted(dest);
     }
 
     public void Copy(string src, string dest, int ownerId, int groupId)
@@ -265,7 +291,179 @@ public sealed class VirtualFileSystem
                 Data = srcNode.Data?.ToArray()
             };
         }
+        AutoSaveIfMounted(dest);
     }
+
+    // ?? Mount / Unmount ????????????????????????????????????????????
+
+    /// <summary>
+    /// Mount a zip archive from the host filesystem into the VFS at the
+    /// given mount point. The mount point directory is created if needed.
+    /// Mounted content is not saved to the rootfs archive.
+    /// If <paramref name="autoSave"/> is true, mutations under this mount
+    /// point are automatically written back to the host zip.
+    /// </summary>
+    public int MountZip(string hostPath, string mountPoint, int ownerId, int groupId, bool autoSave = false)
+    {
+        mountPoint = NormalizePath(mountPoint);
+
+        if (!File.Exists(hostPath))
+            throw new FileNotFoundException($"Host file not found: {hostPath}");
+
+        // Create mount point directory if needed
+        if (!_nodes.ContainsKey(mountPoint))
+        {
+            EnsureParentExists(mountPoint);
+            _nodes[mountPoint] = new VfsNode(mountPoint, true, ownerId, groupId, "rwxr-xr-x");
+        }
+        else if (!_nodes[mountPoint].IsDirectory)
+        {
+            throw new IOException($"Mount point is not a directory: {mountPoint}");
+        }
+
+        _mountPoints[mountPoint] = hostPath;
+        if (autoSave)
+            _autoSaveMounts.Add(mountPoint);
+        else
+            _autoSaveMounts.Remove(mountPoint);
+
+        using var stream = File.OpenRead(hostPath);
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
+
+        int count = 0;
+        foreach (var entry in zip.Entries)
+        {
+            string entryName = entry.FullName.Replace('\\', '/').TrimEnd('/');
+            if (string.IsNullOrEmpty(entryName)) continue;
+
+            string vfsPath = mountPoint.TrimEnd('/') + "/" + entryName;
+            bool isDir = entry.FullName.EndsWith('/') || entry.FullName.EndsWith('\\');
+
+            if (isDir)
+            {
+                // Ensure the full directory chain exists
+                var parts = vfsPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                string current = "";
+                foreach (var part in parts)
+                {
+                    current += "/" + part;
+                    if (!_nodes.ContainsKey(current))
+                        _nodes[current] = new VfsNode(current, true, ownerId, groupId, "rwxr-xr-x");
+                }
+            }
+            else
+            {
+                // Ensure parent directories exist
+                string parent = GetParent(vfsPath);
+                var parentParts = parent.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                string cur = "";
+                foreach (var part in parentParts)
+                {
+                    cur += "/" + part;
+                    if (!_nodes.ContainsKey(cur))
+                        _nodes[cur] = new VfsNode(cur, true, ownerId, groupId, "rwxr-xr-x");
+                }
+
+                using var es = entry.Open();
+                using var ms = new MemoryStream();
+                es.CopyTo(ms);
+
+                _nodes[vfsPath] = new VfsNode(vfsPath, false, ownerId, groupId, "rw-r--r--")
+                {
+                    Data = ms.ToArray()
+                };
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// Unmount a previously mounted archive, removing all nodes under the mount point.
+    /// If <paramref name="saveChanges"/> is true, writes modified content back to the
+    /// original host zip before unmounting.
+    /// </summary>
+    public void Unmount(string mountPoint, bool saveChanges = false)
+    {
+        mountPoint = NormalizePath(mountPoint);
+        if (!_mountPoints.TryGetValue(mountPoint, out var hostPath))
+            throw new IOException($"Not a mount point: {mountPoint}");
+
+        if (saveChanges)
+            SaveMount(mountPoint);
+
+        _mountPoints.Remove(mountPoint);
+        _autoSaveMounts.Remove(mountPoint);
+
+        string prefix = mountPoint + "/";
+        var toRemove = _nodes.Keys
+            .Where(k => k == mountPoint || k.StartsWith(prefix))
+            .ToList();
+        foreach (var k in toRemove)
+            _nodes.Remove(k);
+    }
+
+    /// <summary>
+    /// Write all current content under a mount point back to the original
+    /// host zip archive, replacing its contents entirely.
+    /// </summary>
+    public void SaveMount(string mountPoint)
+    {
+        mountPoint = NormalizePath(mountPoint);
+        if (!_mountPoints.TryGetValue(mountPoint, out var hostPath))
+            throw new IOException($"Not a mount point: {mountPoint}");
+
+        using var stream = File.Create(hostPath);
+        using var zip = new ZipArchive(stream, ZipArchiveMode.Create);
+
+        string prefix = mountPoint.TrimEnd('/') + "/";
+
+        foreach (var (path, node) in _nodes.OrderBy(kv => kv.Key))
+        {
+            if (path == mountPoint) continue; // skip the mount root itself
+            if (!path.StartsWith(prefix)) continue;
+
+            // Entry name is relative to the mount point
+            string entryName = path[prefix.Length..];
+
+            if (node.IsDirectory)
+            {
+                zip.CreateEntry(entryName + "/");
+            }
+            else
+            {
+                var entry = zip.CreateEntry(entryName, CompressionLevel.SmallestSize);
+                if (node.Data != null)
+                {
+                    using var es = entry.Open();
+                    es.Write(node.Data, 0, node.Data.Length);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns true if the given path is at or below a mount point.
+    /// </summary>
+    public bool IsMounted(string path)
+    {
+        path = NormalizePath(path);
+        foreach (var mp in _mountPoints.Keys)
+        {
+            if (path == mp || path.StartsWith(mp + "/"))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Returns all active mount points, their host zip paths, and whether auto-save is enabled.
+    /// </summary>
+    public (string mountPoint, string hostPath, bool autoSave)[] GetMountPoints() =>
+        _mountPoints.OrderBy(kv => kv.Key)
+            .Select(kv => (kv.Key, kv.Value, _autoSaveMounts.Contains(kv.Key)))
+            .ToArray();
 
     // ?? Helpers ????????????????????????????????????????????????????
 

@@ -1688,6 +1688,93 @@ public static class HelpPages
             source, help, man api, man scripting
         """;
 
+    public const string Mount = """
+        MOUNT(8)                  NetNIX Manual                  MOUNT(8)
+
+        NAME
+            mount - mount a host zip archive into the virtual filesystem
+
+        SYNOPSIS
+            mount [options] <host-path> <mount-point>
+            mount --sync <mount-point>
+            mount
+
+        DESCRIPTION
+            Mounts an external zip archive from the host operating system
+            into the NetNIX virtual filesystem at the specified mount
+            point. The contents of the zip become accessible as regular
+            files and directories under the mount point.
+
+            By default, mounts are read-only (ro): changes are held in
+            memory and not written back to the host zip unless you use
+            --sync or umount --save.
+
+            With --rw (writable mode), every mutation (file create, write,
+            delete, move, copy) under the mount point is automatically
+            saved back to the host zip as it happens.
+
+            With no arguments, lists all active mounts and their mode.
+
+            Only root (uid 0) can mount, unmount, and sync archives.
+
+        OPTIONS
+            -w, --rw        Writable mode: auto-save changes to host zip
+            -s, --sync      Save in-memory changes back to the host zip
+            -h, --help      Show help
+
+        EXAMPLES
+            mount extra.zip /mnt/extra                     (read-only)
+            mount --rw extra.zip /mnt/extra                (writable, auto-save)
+
+            ls /mnt/extra
+            echo "hello" > /mnt/extra/notes.txt
+            mount --sync /mnt/extra                        (manual save)
+            umount --save /mnt/extra                       (save + unmount)
+
+            mount                  (list active mounts with ro/rw mode)
+
+        NOTES
+            The mount point directory is created automatically.
+            In rw mode the host zip is rewritten on every change.
+            In ro mode the host zip is untouched unless you sync.
+
+        SEE ALSO
+            umount, zip, unzip
+        """;
+
+    public const string Umount = """
+        UMOUNT(8)                 NetNIX Manual                 UMOUNT(8)
+
+        NAME
+            umount - unmount a previously mounted archive
+
+        SYNOPSIS
+            umount [options] <mount-point>
+
+        DESCRIPTION
+            Removes a previously mounted archive from the virtual
+            filesystem. All files and directories under the mount point
+            are removed from memory.
+
+            With the --save flag, changes made to files under the mount
+            point are written back to the original host zip archive
+            before unmounting.
+
+            Without --save, all in-memory changes are discarded.
+
+            Only root (uid 0) can unmount archives.
+
+        OPTIONS
+            -s, --save      Save changes to the host zip before unmounting
+
+        EXAMPLES
+            umount /mnt/data              Discard changes and unmount
+            umount --save /mnt/data       Save changes, then unmount
+
+        SEE ALSO
+            mount, zip, unzip
+        """;
+
     public const string ApiReference = """
         API(7)                    NetNIX Manual                    API(7)
 
