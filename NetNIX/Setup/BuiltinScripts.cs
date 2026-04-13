@@ -25,6 +25,7 @@ public static class BuiltinScripts
         "importfile.cs",
         "npak.cs",
         "npak-demo.cs",
+        "reinstall.cs",
     };
 
     /// <summary>

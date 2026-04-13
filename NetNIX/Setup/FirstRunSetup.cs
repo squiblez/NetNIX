@@ -328,7 +328,7 @@ public static class FirstRunSetup
         }
     }
 
-    private static void InstallBuiltinScripts(VirtualFileSystem fs)
+    public static void InstallBuiltinScripts(VirtualFileSystem fs)
     {
         var scripts = BuiltinScripts.LoadAll();
 
@@ -352,7 +352,7 @@ public static class FirstRunSetup
         Console.WriteLine($"  Installed {binCount} commands in /bin/, {sbinCount} in /sbin/");
     }
 
-    private static void InstallBuiltinLibs(VirtualFileSystem fs)
+    public static void InstallBuiltinLibs(VirtualFileSystem fs)
     {
         var libs = BuiltinLibs.LoadAll();
 
@@ -374,7 +374,7 @@ public static class FirstRunSetup
         Console.WriteLine($"  Installed {libs.Count} libraries in /lib/");
     }
 
-    private static void InstallManPages(VirtualFileSystem fs)
+    public static void InstallManPages(VirtualFileSystem fs)
     {
         var pages = new Dictionary<string, string>
         {
@@ -461,6 +461,7 @@ public static class FirstRunSetup
             ["filesystem"]  = HelpPages.FilesystemGuide,
             ["permissions"] = HelpPages.PermissionsGuide,
             ["sandbox"]     = HelpPages.Sandbox,
+            ["settingslib"] = HelpPages.Settingslib,
         };
 
         foreach (var (name, content) in pages)

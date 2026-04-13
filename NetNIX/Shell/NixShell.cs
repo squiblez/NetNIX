@@ -203,11 +203,12 @@ public sealed class NixShell
             whoami  id  uname  hostname  date  env
             basename  dirname  du  df  yes  true  false
             curl  wget  fetch  cbpaste  cbcopy  zip  unzip
+            settings-demo
 
           System admin commands (/sbin/*.cs — root/sudo):
             useradd  userdel  usermod
             groupadd  groupdel  groupmod
-            mount  umount  export  importfile
+            mount  umount  export  importfile  reinstall
             npak  npak-demo
 
           Help topics:
@@ -218,6 +219,7 @@ public sealed class NixShell
             man filesystem      Filesystem hierarchy
             man permissions     File permission system
             man sandbox         Script sandbox security (/etc/sandbox.conf)
+            man settingslib     Application settings library
             man nshrc           Shell startup scripts
 
           Shell scripts:
