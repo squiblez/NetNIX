@@ -2455,6 +2455,83 @@ public static class HelpPages
             man api, man scripting, man include, settings-demo
         """;
 
+    public const string Daemon = """
+        DAEMON(8)                 NetNIX Manual                 DAEMON(8)
+
+        NAME
+            daemon - manage background daemon processes
+
+        SYNOPSIS
+            daemon start <script.cs> [args...]
+            daemon stop <name|pid>
+            daemon list
+            daemon status <name|pid>
+
+        DESCRIPTION
+            Manages long-running background processes (daemons) within
+            the NetNIX environment. Daemons run on background threads
+            and continue even after the user logs out (until the NetNIX
+            process exits or the daemon is stopped).
+
+            Only root (uid 0) can start or stop daemons.
+
+        DAEMON SCRIPTS
+            Daemon scripts are .cs files that implement:
+
+                static int Daemon(NixApi api, string[] args)
+
+            Instead of the usual Run() method, daemons use Daemon().
+            They can also have a Run() method for non-daemon usage
+            (e.g., printing help when run directly).
+
+            Daemons should check api.DaemonToken.IsCancellationRequested
+            periodically to support graceful shutdown:
+
+                while (!api.DaemonToken.IsCancellationRequested)
+                {
+                    // do work
+                }
+
+        SANDBOX EXCEPTIONS
+            Daemons that need blocked APIs (e.g., System.Net for a web
+            server) require sandbox exceptions in /etc/sandbox.exceptions.
+
+            Format: <script-name> <namespace-or-token>
+
+            Example for httpd:
+                httpd  System.Net
+                httpd  HttpListener(
+
+            Root can edit /etc/sandbox.exceptions with:
+                edit /etc/sandbox.exceptions
+
+        SUBCOMMANDS
+            start <script> [args]   Compile and start a daemon
+            stop <name|pid>         Stop a running daemon
+            list                    List all daemons (running and stopped)
+            status <name|pid>       Show detailed daemon information
+
+        EXAMPLES
+            # Enable httpd sandbox exceptions first
+            edit /etc/sandbox.exceptions
+            # (uncomment the httpd lines)
+
+            # Start the HTTP server daemon
+            daemon start httpd 8080
+
+            # List running daemons
+            daemon list
+
+            # Check status
+            daemon status httpd
+
+            # Stop it
+            daemon stop httpd
+
+        SEE ALSO
+            httpd, man sandbox
+        """;
+
     public const string Sandbox = """
         SANDBOX(5)                NetNIX Manual                SANDBOX(5)
 

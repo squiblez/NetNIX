@@ -13,15 +13,17 @@ public sealed class NixShell
     private readonly VirtualFileSystem _fs;
     private readonly UserManager _userMgr;
     private readonly ScriptRunner _scriptRunner;
+    private readonly DaemonManager _daemonMgr;
     private UserRecord _currentUser;
     private string _cwd;
     private bool _running = true;
 
-    public NixShell(VirtualFileSystem fs, UserManager userMgr, ScriptRunner scriptRunner, UserRecord user)
+    public NixShell(VirtualFileSystem fs, UserManager userMgr, ScriptRunner scriptRunner, DaemonManager daemonMgr, UserRecord user)
     {
         _fs = fs;
         _userMgr = userMgr;
         _scriptRunner = scriptRunner;
+        _daemonMgr = daemonMgr;
         _currentUser = user;
         _cwd = user.HomeDirectory;
 
@@ -118,6 +120,7 @@ public sealed class NixShell
                 case "run": CmdRun(args); break;
                 case "source":
                 case ".": CmdSource(args); break;
+                case "daemon": CmdDaemon(args); break;
                 case "clear": Console.Clear(); break;
                 case "exit":
                 case "logout":
@@ -195,7 +198,7 @@ public sealed class NixShell
           Shell builtins:
             help  man  cd  edit  write  chmod  chown  stat  tree
             adduser  deluser  passwd  su  sudo  users  groups
-            run  source  clear  exit/logout
+            run  source  daemon  clear  exit/logout
 
           Script commands (/bin/*.cs):
             ls  cat  cp  mv  rm  mkdir  rmdir  touch
@@ -209,7 +212,7 @@ public sealed class NixShell
             useradd  userdel  usermod
             groupadd  groupdel  groupmod
             mount  umount  export  importfile  reinstall
-            npak  npak-demo
+            npak  npak-demo  httpd
 
           Help topics:
             man api             NixApi scripting reference
@@ -960,5 +963,166 @@ public sealed class NixShell
         sb.Replace("$HOSTNAME", "netnix");
         sb.Replace("~", _currentUser.HomeDirectory);
         return sb.ToString();
+    }
+
+    // ?? Daemon management ????????????????????????????????????????????
+
+    private void CmdDaemon(List<string> args)
+    {
+        if (args.Count == 0)
+        {
+            PrintDaemonUsage();
+            return;
+        }
+
+        string sub = args[0].ToLowerInvariant();
+        var subArgs = args.Skip(1).ToList();
+
+        switch (sub)
+        {
+            case "start":
+                DaemonStart(subArgs);
+                break;
+            case "stop":
+                DaemonStop(subArgs);
+                break;
+            case "list":
+            case "ls":
+                DaemonList();
+                break;
+            case "status":
+                DaemonStatus(subArgs);
+                break;
+            case "-h":
+            case "--help":
+                PrintDaemonUsage();
+                break;
+            default:
+                Console.WriteLine($"daemon: unknown subcommand '{sub}'");
+                PrintDaemonUsage();
+                break;
+        }
+    }
+
+    private void DaemonStart(List<string> subArgs)
+    {
+        if (_currentUser.Uid != 0)
+        {
+            Console.WriteLine("daemon: permission denied (must be root)");
+            return;
+        }
+
+        if (subArgs.Count == 0)
+        {
+            Console.WriteLine("daemon: start requires a script path");
+            Console.WriteLine("Usage: daemon start <script.cs> [args...]");
+            return;
+        }
+
+        string scriptArg = subArgs[0];
+        string vfsPath = VirtualFileSystem.ResolvePath(_cwd, scriptArg);
+
+        // Try adding .cs if not found
+        if (!_fs.IsFile(vfsPath) && !vfsPath.EndsWith(".cs"))
+            vfsPath += ".cs";
+
+        // Also search /sbin, /bin
+        if (!_fs.IsFile(vfsPath))
+        {
+            foreach (var dir in new[] { "/sbin", "/bin", "/usr/local/bin" })
+            {
+                string candidate = dir + "/" + scriptArg + ".cs";
+                if (_fs.IsFile(candidate)) { vfsPath = candidate; break; }
+                candidate = dir + "/" + scriptArg;
+                if (_fs.IsFile(candidate)) { vfsPath = candidate; break; }
+            }
+        }
+
+        string name = VirtualFileSystem.GetName(vfsPath).Replace(".cs", "");
+        var extraArgs = subArgs.Skip(1).ToArray();
+
+        int pid = _daemonMgr.Start(name, vfsPath, extraArgs, _currentUser, _cwd);
+        if (pid >= 0)
+        {
+            Console.WriteLine($"daemon: started '{name}' (pid {pid})");
+        }
+    }
+
+    private void DaemonStop(List<string> subArgs)
+    {
+        if (_currentUser.Uid != 0)
+        {
+            Console.WriteLine("daemon: permission denied (must be root)");
+            return;
+        }
+
+        if (subArgs.Count == 0)
+        {
+            Console.WriteLine("daemon: stop requires a name or PID");
+            Console.WriteLine("Usage: daemon stop <name|pid>");
+            return;
+        }
+
+        if (_daemonMgr.Stop(subArgs[0], _currentUser.Uid))
+        {
+            Console.WriteLine($"daemon: '{subArgs[0]}' stopped");
+        }
+    }
+
+    private void DaemonList()
+    {
+        var daemons = _daemonMgr.List();
+        if (daemons.Length == 0)
+        {
+            Console.WriteLine("No daemons running.");
+            return;
+        }
+
+        Console.WriteLine($"{"PID",-8} {"NAME",-16} {"STATUS",-10} {"OWNER",-10} {"STARTED"}");
+        foreach (var d in daemons)
+        {
+            Console.WriteLine($"{d.Pid,-8} {d.Name,-16} {d.Status,-10} {d.Owner,-10} {d.StartedAt:HH:mm:ss}");
+        }
+    }
+
+    private void DaemonStatus(List<string> subArgs)
+    {
+        if (subArgs.Count == 0)
+        {
+            DaemonList();
+            return;
+        }
+
+        var info = _daemonMgr.GetStatus(subArgs[0]);
+        if (info == null)
+        {
+            Console.WriteLine($"daemon: '{subArgs[0]}' not found");
+            return;
+        }
+
+        Console.WriteLine($"Name:    {info.Name}");
+        Console.WriteLine($"PID:     {info.Pid}");
+        Console.WriteLine($"Status:  {info.Status}");
+        Console.WriteLine($"Script:  {info.ScriptPath}");
+        Console.WriteLine($"Owner:   {info.Owner}");
+        Console.WriteLine($"Started: {info.StartedAt:yyyy-MM-dd HH:mm:ss}");
+        if (info.StoppedAt.HasValue)
+            Console.WriteLine($"Stopped: {info.StoppedAt.Value:yyyy-MM-dd HH:mm:ss}");
+    }
+
+    private static void PrintDaemonUsage()
+    {
+        Console.WriteLine("daemon — manage background daemon processes");
+        Console.WriteLine();
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  daemon start <script.cs> [args...]   Start a daemon");
+        Console.WriteLine("  daemon stop <name|pid>               Stop a running daemon");
+        Console.WriteLine("  daemon list                          List all daemons");
+        Console.WriteLine("  daemon status <name|pid>             Show daemon details");
+        Console.WriteLine();
+        Console.WriteLine("Daemon scripts must implement:");
+        Console.WriteLine("  static int Daemon(NixApi api, string[] args)");
+        Console.WriteLine();
+        Console.WriteLine("Only root can start or stop daemons.");
     }
 }

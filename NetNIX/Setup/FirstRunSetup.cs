@@ -84,6 +84,9 @@ public static class FirstRunSetup
         var sandboxData = System.Text.Encoding.UTF8.GetBytes(NetNIX.Scripting.ScriptRunner.DefaultSandboxConfig);
         fs.CreateFile("/etc/sandbox.conf", 0, 0, sandboxData, "rw-r-----");
 
+        var exceptionsData = System.Text.Encoding.UTF8.GetBytes(NetNIX.Scripting.ScriptRunner.DefaultSandboxExceptions);
+        fs.CreateFile("/etc/sandbox.exceptions", 0, 0, exceptionsData, "rw-r-----");
+
         // 6. Install built-in script commands
         Console.WriteLine("[*] Installing built-in commands...");
         InstallBuiltinScripts(fs);
@@ -169,6 +172,9 @@ public static class FirstRunSetup
 
             // Package manager
             ("/var/lib/npak",   0, 0, "rwxr-xr-x"),
+
+            // Web server
+            ("/var/www",        0, 0, "rwxr-xr-x"),
         ];
 
         foreach (var (path, uid, gid, perms) in dirs)
@@ -462,6 +468,7 @@ public static class FirstRunSetup
             ["permissions"] = HelpPages.PermissionsGuide,
             ["sandbox"]     = HelpPages.Sandbox,
             ["settingslib"] = HelpPages.Settingslib,
+            ["daemon"]      = HelpPages.Daemon,
         };
 
         foreach (var (name, content) in pages)

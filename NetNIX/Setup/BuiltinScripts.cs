@@ -26,6 +26,7 @@ public static class BuiltinScripts
         "npak.cs",
         "npak-demo.cs",
         "reinstall.cs",
+        "httpd.cs",
     };
 
     /// <summary>

@@ -19,6 +19,12 @@ public sealed class NixApi
     public string Username { get; }
     public string Cwd { get; }
 
+    /// <summary>
+    /// Cancellation token for daemon scripts. Check this to support graceful shutdown.
+    /// For non-daemon scripts this is CancellationToken.None.
+    /// </summary>
+    public CancellationToken DaemonToken { get; set; } = CancellationToken.None;
+
     public NixApi(VirtualFileSystem fs, UserManager userMgr, int uid, int gid, string username, string cwd)
     {
         _fs = fs;

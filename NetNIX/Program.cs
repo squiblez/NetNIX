@@ -50,6 +50,7 @@ void Boot()
 
     // ── Initialise script runner ───────────────────────────────────────
     var scriptRunner = new ScriptRunner(fs, userMgr);
+    var daemonMgr = new NetNIX.Scripting.DaemonManager(fs, userMgr, scriptRunner);
 
     // ── Display MOTD ───────────────────────────────────────────────────
     if (fs.IsFile("/etc/motd"))
@@ -88,7 +89,7 @@ void Boot()
         }
 
         // ── Launch shell ───────────────────────────────────────────────
-        var shell = new NixShell(fs, userMgr, scriptRunner, user);
+        var shell = new NixShell(fs, userMgr, scriptRunner, daemonMgr, user);
         shell.Run();
 
         // After shell exits, save and show login again

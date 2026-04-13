@@ -460,9 +460,10 @@ public sealed class ScriptRunner
     /// Scans the preprocessed script source against the sandbox config.
     /// Checks 'using' directives against blocked namespace prefixes and
     /// scans the full source for blocked token strings.
+    /// If <paramref name="exceptions"/> is provided, matching rules are skipped.
     /// Returns true if the source is safe, false if blocked.
     /// </summary>
-    private bool PassesSecurityScan(string source, string label)
+    private bool PassesSecurityScan(string source, string label, HashSet<string>? exceptions = null)
     {
         var (blockedUsings, blockedTokens) = LoadSandboxConfig();
 
@@ -482,6 +483,10 @@ public sealed class ScriptRunner
                     if (ns.Equals(blocked, StringComparison.Ordinal) ||
                         ns.StartsWith(blocked + ".", StringComparison.Ordinal))
                     {
+                        // Check exceptions
+                        if (exceptions != null && (exceptions.Contains(blocked) || exceptions.Contains(ns)))
+                            continue;
+
                         Console.WriteLine($"nsh: {label}: blocked — 'using {ns}' is not permitted");
                         Console.WriteLine($"  Namespace '{blocked}' is blocked by /etc/sandbox.conf");
                         Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
@@ -497,6 +502,10 @@ public sealed class ScriptRunner
         {
             if (source.Contains(token, StringComparison.Ordinal))
             {
+                // Check exceptions
+                if (exceptions != null && exceptions.Contains(token))
+                    continue;
+
                 Console.WriteLine($"nsh: {label}: blocked — use of '{token}' is not permitted");
                 Console.WriteLine("  This pattern is blocked by /etc/sandbox.conf");
                 Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
@@ -506,6 +515,156 @@ public sealed class ScriptRunner
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Loads /etc/sandbox.exceptions — lists per-script sandbox rule overrides.
+    /// Format: &lt;script-name-or-path&gt; &lt;namespace-or-token&gt;
+    /// </summary>
+    private HashSet<string> LoadSandboxExceptions(string scriptNameOrPath)
+    {
+        var exceptions = new HashSet<string>(StringComparer.Ordinal);
+        const string path = "/etc/sandbox.exceptions";
+        if (!_fs.IsFile(path))
+            return exceptions;
+
+        string content = Encoding.UTF8.GetString(_fs.ReadFile(path));
+        foreach (var rawLine in content.Split('\n'))
+        {
+            string line = rawLine.Trim().TrimEnd('\r');
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+
+            // Split on first whitespace
+            int space = line.IndexOfAny([' ', '\t']);
+            if (space <= 0) continue;
+
+            string scriptKey = line[..space].Trim();
+            string exception = line[(space + 1)..].Trim();
+
+            // Match if script name or path matches
+            if (scriptKey.Equals(scriptNameOrPath, StringComparison.OrdinalIgnoreCase) ||
+                scriptKey.Equals("*", StringComparison.Ordinal) ||
+                scriptNameOrPath.EndsWith("/" + scriptKey, StringComparison.OrdinalIgnoreCase) ||
+                scriptNameOrPath.EndsWith("/" + scriptKey + ".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                exceptions.Add(exception);
+            }
+        }
+
+        return exceptions;
+    }
+
+    /// <summary>
+    /// Default content for /etc/sandbox.exceptions.
+    /// </summary>
+    public const string DefaultSandboxExceptions = """
+        # /etc/sandbox.exceptions — per-script sandbox overrides
+        # Managed by root. Changes take effect on the next script/daemon run.
+        #
+        # Format:  <script-name>  <namespace-or-token>
+        #
+        # The script name can be a bare name (e.g. "httpd"), a full VFS path
+        # (e.g. "/sbin/httpd.cs"), or "*" to apply to all scripts.
+        #
+        # Each line grants ONE exception to ONE script.
+
+        # httpd — HTTP server daemon (uncomment to enable)
+        # httpd  System.Net
+        # httpd  HttpListener(
+        """;
+
+    /// <summary>
+    /// Additional assembly names that can be unlocked via sandbox exceptions.
+    /// Only loaded for scripts that have matching exceptions.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> ExceptionAssemblies = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["System.Net"] = ["System.Net.Primitives", "System.Net.HttpListener", "System.Net.Sockets", "System.Net.Http", "System.Private.Uri"],
+        ["System.Net.Http"] = ["System.Net.Http", "System.Net.Primitives"],
+        ["System.Net.Sockets"] = ["System.Net.Sockets", "System.Net.Primitives"],
+        ["System.IO"] = ["System.IO.FileSystem", "System.IO.FileSystem.Primitives"],
+        ["System.Diagnostics"] = ["System.Diagnostics.Process"],
+    };
+
+    /// <summary>
+    /// Compile a script with sandbox exceptions applied. Used by DaemonManager.
+    /// Preprocesses includes, runs security scan with exceptions, and compiles
+    /// with extra assemblies as needed.
+    /// Returns the compiled assembly, or null on failure.
+    /// </summary>
+    public Assembly? CompileWithExceptions(string source, string name, string vfsPath)
+    {
+        string cwd = VirtualFileSystem.GetParent(vfsPath);
+        source = PreprocessIncludes(source, cwd, name);
+
+        var exceptions = LoadSandboxExceptions(name);
+        // Also check by full path
+        foreach (var ex in LoadSandboxExceptions(vfsPath))
+            exceptions.Add(ex);
+
+        if (!PassesSecurityScan(source, name, exceptions))
+            return null;
+
+        // Determine extra assemblies needed based on exceptions
+        var extraAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var exc in exceptions)
+        {
+            if (ExceptionAssemblies.TryGetValue(exc, out var asms))
+            {
+                foreach (var asm in asms)
+                    extraAssemblies.Add(asm);
+            }
+        }
+
+        return CompileExtended(source, name, extraAssemblies);
+    }
+
+    /// <summary>
+    /// Compile with the standard allowlist plus additional assemblies.
+    /// </summary>
+    private static Assembly? CompileExtended(string source, string label, HashSet<string>? extraAssemblies = null)
+    {
+        var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        var references = new List<MetadataReference>();
+
+        var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var asmPath in trustedAssemblies)
+        {
+            string name = Path.GetFileNameWithoutExtension(asmPath);
+            bool allowed = AllowedAssemblies.Contains(name) ||
+                           (extraAssemblies != null && extraAssemblies.Contains(name));
+            if (!allowed) continue;
+            try { references.Add(MetadataReference.CreateFromFile(asmPath)); }
+            catch { /* skip unavailable */ }
+        }
+
+        var selfLocation = typeof(ScriptRunner).Assembly.Location;
+        if (!string.IsNullOrEmpty(selfLocation) && File.Exists(selfLocation))
+            references.Add(MetadataReference.CreateFromFile(selfLocation));
+
+        var compilation = CSharpCompilation.Create(
+            $"NixScript_{Guid.NewGuid():N}",
+            [syntaxTree],
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+                .WithOptimizationLevel(OptimizationLevel.Release));
+
+        using var ms = new MemoryStream();
+        var result = compilation.Emit(ms);
+
+        if (!result.Success)
+        {
+            Console.WriteLine($"nsh: {label}: compilation failed:");
+            foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
+                Console.WriteLine($"  {diag}");
+            return null;
+        }
+
+        ms.Seek(0, SeekOrigin.Begin);
+        return Assembly.Load(ms.ToArray());
     }
 
     // Allowlist of assembly names that scripts are permitted to reference.
@@ -553,49 +712,6 @@ public sealed class ScriptRunner
 
     private static Assembly? Compile(string source, string label)
     {
-        var syntaxTree = CSharpSyntaxTree.ParseText(source);
-
-        // Gather references — only safe assemblies from the allowlist
-        var references = new List<MetadataReference>();
-
-        var trustedAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") ?? "")
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var asmPath in trustedAssemblies)
-        {
-            string name = Path.GetFileNameWithoutExtension(asmPath);
-            if (!AllowedAssemblies.Contains(name))
-                continue;
-            try { references.Add(MetadataReference.CreateFromFile(asmPath)); }
-            catch { /* skip unavailable */ }
-        }
-
-        // Also reference the NetNIX assembly itself so scripts can use NixApi
-        var selfLocation = typeof(ScriptRunner).Assembly.Location;
-        if (!string.IsNullOrEmpty(selfLocation) && File.Exists(selfLocation))
-            references.Add(MetadataReference.CreateFromFile(selfLocation));
-
-        var compilation = CSharpCompilation.Create(
-            $"NixScript_{Guid.NewGuid():N}",
-            [syntaxTree],
-            references,
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-                .WithOptimizationLevel(OptimizationLevel.Release));
-
-        using var ms = new MemoryStream();
-        var result = compilation.Emit(ms);
-
-        if (!result.Success)
-        {
-            Console.WriteLine($"nsh: {label}: compilation failed:");
-            foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
-            {
-                Console.WriteLine($"  {diag}");
-            }
-            return null;
-        }
-
-        ms.Seek(0, SeekOrigin.Begin);
-        return Assembly.Load(ms.ToArray());
+        return CompileExtended(source, label);
     }
 }
