@@ -17,43 +17,83 @@ Everything lives in a single portable zip archive on your host OS. No admin righ
 ## Screenshots
 
 <p align="center">
-  <img src="ReadMe_Resources/Login.png" alt="Login Screen" width="700"/><br/>
+  <img src="Screenshots/login.png" alt="Login Screen" width="700"/><br/>
   <em>Login prompt and boot sequence</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/Editor.png" alt="Text Editor" width="700"/><br/>
-  <em>Built-in full-screen text editor</em>
+  <img src="Screenshots/Basic Unix 1.png" alt="Basic Unix Commands" width="700"/><br/>
+  <em>Basic UNIX commands — navigating the virtual filesystem</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/Switch User.png" alt="Switch User" width="700"/><br/>
-  <em>Multi-user support — switching between accounts with <code>su</code> and <code>sudo</code></em>
+  <img src="Screenshots/Basic Unix 2.png" alt="File Operations" width="700"/><br/>
+  <em>File operations — creating, reading, and managing files</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/SH Shell Script Test 1.png" alt="Shell Scripting" width="700"/><br/>
-  <em>Writing and running shell scripts</em>
+  <img src="Screenshots/Basic Unix 3.png" alt="Advanced Operations" width="700"/><br/>
+  <em>Advanced filesystem operations</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/SH Shell Script Test 2.png" alt="Shell Script Output" width="700"/><br/>
-  <em>Shell script output with variable expansion</em>
+  <img src="Screenshots/command screenshot.png" alt="Command Overview" width="700"/><br/>
+  <em>Available commands and help system</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/Get Files From Web 1.png" alt="Networking" width="700"/><br/>
-  <em>Downloading files from the web with built-in networking commands</em>
+  <img src="Screenshots/New User SUDO screenshot.png" alt="User Management & Sudo" width="700"/><br/>
+  <em>Multi-user support — creating users and using <code>sudo</code></em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/Zipping Archive.png" alt="Zip Archive" width="700"/><br/>
-  <em>Creating zip archives within the virtual filesystem</em>
+  <img src="Screenshots/NSHRC User Startuo.png" alt="Shell Startup Scripts" width="700"/><br/>
+  <em>Per-user shell startup scripts (<code>~/.nshrc</code>)</em>
 </p>
 
 <p align="center">
-  <img src="ReadMe_Resources/Unzipping Archive.png" alt="Unzip Archive" width="700"/><br/>
-  <em>Extracting zip archives within the virtual filesystem</em>
+  <img src="Screenshots/Man help pages 1.png" alt="Man Pages 1" width="700"/><br/>
+  <em>Comprehensive manual pages — 83 built-in topics</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Man help pages 2.png" alt="Man Pages 2" width="700"/><br/>
+  <em>Detailed command documentation with examples</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Man help pages 3 zip .pngz.png" alt="Man Pages Zip" width="700"/><br/>
+  <em>Library and archive documentation</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Mount Screenshot.png" alt="Mount" width="700"/><br/>
+  <em>Mounting host zip archives into the VFS with <code>mount</code></em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Mount umount unmount Screenshot.png" alt="Mount and Umount" width="700"/><br/>
+  <em>Full mount/unmount lifecycle — read-only and read-write support</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/NPAK 1.png" alt="Package Manager 1" width="700"/><br/>
+  <em>Package manager (<code>npak</code>) — building and installing packages</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/NPAK 2.png" alt="Package Manager 2" width="700"/><br/>
+  <em>Package manager — listing, inspecting, and removing packages</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Sandbox Screenshot 1 Configuration.png" alt="Sandbox Configuration" width="700"/><br/>
+  <em>Sandbox security — <code>/etc/sandbox.conf</code> controls blocked APIs</em>
+</p>
+
+<p align="center">
+  <img src="Screenshots/Sandbox Screenshot 2 Exceptions.png" alt="Sandbox Exceptions" width="700"/><br/>
+  <em>Per-script sandbox exceptions — granting trusted daemons access to blocked APIs</em>
 </p>
 
 ---

@@ -15,8 +15,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ReadMe_Resources", "ReadMe_
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png
-		..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo bas.png = ..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo bas.png
-		..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo des.png = ..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo des.png
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png
 		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png
@@ -43,6 +41,26 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "root", "root", "{DA59BFA4-7
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "helpman", "helpman", "{7364B9E7-A24B-44A0-84E7-B46B9333C21A}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Screenshots", "Screenshots", "{717BDD3F-0E6A-4764-BA25-8CDB666CCA8D}"
+	ProjectSection(SolutionItems) = preProject
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 3 zip .pngz.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 3 zip .pngz.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount Screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount Screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount umount unmount Screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount umount unmount Screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\New User SUDO screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\New User SUDO screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NSHRC User Startuo.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NSHRC User Startuo.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 1 Configuration.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 1 Configuration.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 2 Exceptions.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 2 Exceptions.png
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -59,6 +77,7 @@ Global
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{DA59BFA4-7E17-4C2C-8D44-2B996EE8A812} = {19332185-0858-4B1F-BFD7-EC85E7C2FC59}
+		{717BDD3F-0E6A-4764-BA25-8CDB666CCA8D} = {8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {50F4E620-919A-45DC-B94E-73351D22B9CE}
