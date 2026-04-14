@@ -11,19 +11,30 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "lib", "lib", "{30B30E88-971
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "ReadMe_Resources", "ReadMe_Resources", "{5B51825E-B64D-4FAF-862A-08447DFD5921}"
 	ProjectSection(SolutionItems) = preProject
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Editor.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Editor.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Get Files From Web 1.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Get Files From Web 1.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Login.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Login.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\SH Shell Script Test 1.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\SH Shell Script Test 1.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\SH Shell Script Test 2.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\SH Shell Script Test 2.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Switch User.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Switch User.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Unzipping Archive.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Unzipping Archive.png
-		..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Zipping Archive.png = ..\..\..\OneDrive\Pictures\NetNix\0.0.1 screens 1\Zipping Archive.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Basic Unix 3.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\command screenshot.png
+		..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo bas.png = ..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo bas.png
+		..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo des.png = ..\..\..\OneDrive\Pictures\NetNix\Full NetNIX logo des.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\login.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 3 zip .pngz.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Man help pages 3 zip .pngz.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount Screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount Screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount umount unmount Screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Mount umount unmount Screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\New User SUDO screenshot.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\New User SUDO screenshot.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 1.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 1.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 2.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NPAK 2.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NSHRC User Startuo.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\NSHRC User Startuo.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 1 Configuration.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 1 Configuration.png
+		..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 2 Exceptions.png = ..\..\..\OneDrive\Pictures\Screenshots\ReleaseScreens\0.0.2 screens\Sandbox Screenshot 2 Exceptions.png
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
 	ProjectSection(SolutionItems) = preProject
 		..\..\..\OneDrive\Documents\NetNIX_Extra\extra.zip = ..\..\..\OneDrive\Documents\NetNIX_Extra\extra.zip
+		README.md = README.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "factoryfiles", "factoryfiles", "{19332185-0858-4B1F-BFD7-EC85E7C2FC59}"
