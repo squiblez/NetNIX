@@ -45,6 +45,17 @@ void Boot()
     {
         FirstRunSetup.Run(fs, userMgr, archivePath);
     }
+    else
+    {
+        // ── Silent auto-update of factory files on every boot ──────────
+        // Ensures VFS always has the latest scripts, libraries, man pages,
+        // and factory files from the build output, even after an update.
+        FirstRunSetup.InstallBuiltinScripts(fs);
+        FirstRunSetup.InstallBuiltinLibs(fs);
+        FirstRunSetup.InstallManPages(fs);
+        FirstRunSetup.InstallFactoryFiles(fs);
+        fs.Save();
+    }
 
     userMgr.Load();
 

@@ -104,7 +104,6 @@ public sealed class NixShell
                 case "help": CmdHelp(); break;
                 case "man": CmdMan(args); break;
                 case "cd": CmdCd(args); break;
-                case "edit": CmdEdit(args); break;
                 case "write": CmdWrite(args); break;
                 case "chmod": CmdChmod(args); break;
                 case "chown": CmdChown(args); break;
@@ -196,7 +195,7 @@ public sealed class NixShell
           Use 'man --list' to see all manual pages.
 
           Shell builtins:
-            help  man  cd  edit  write  chmod  chown  stat  tree
+            help  man  cd  write  chmod  chown  stat  tree
             adduser  deluser  passwd  su  sudo  users  groups
             run  source  daemon  clear  exit/logout
 
@@ -206,7 +205,7 @@ public sealed class NixShell
             whoami  id  uname  hostname  date  env
             basename  dirname  du  df  yes  true  false
             curl  wget  fetch  cbpaste  cbcopy  zip  unzip
-            kobold  settings-demo
+            edit  kobold  koder  settings-demo
 
           System admin commands (/sbin/*.cs — root/sudo):
             useradd  userdel  usermod
@@ -230,6 +229,7 @@ public sealed class NixShell
             man httpd                Built-in HTTP server daemon
             man kobold               AI chat client for KoboldCpp
             man koboldlib            KoboldCpp client library
+            man koder                AI command generator
 
           Shell scripts:
             source <file>       Execute a shell script (one command per line)
@@ -250,47 +250,7 @@ public sealed class NixShell
         _scriptRunner.RunFile(path, scriptArgs, _currentUser, _cwd);
     }
 
-    private void CmdEdit(List<string> args)
-    {
-        if (args.Count == 0) { Console.WriteLine("edit: usage: edit <file>"); return; }
 
-        string path = VirtualFileSystem.ResolvePath(_cwd, args[0]);
-
-        if (_fs.IsDirectory(path))
-        {
-            Console.WriteLine($"edit: {args[0]}: Is a directory");
-            return;
-        }
-
-        if (_fs.IsFile(path))
-        {
-            var node = _fs.GetNode(path);
-            if (node != null && !node.CanRead(_currentUser.Uid, _currentUser.Gid))
-            {
-                Console.WriteLine($"edit: {args[0]}: Permission denied");
-                return;
-            }
-            if (node != null && !node.CanWrite(_currentUser.Uid, _currentUser.Gid))
-            {
-                Console.WriteLine($"edit: {args[0]}: Permission denied (read-only)");
-                return;
-            }
-        }
-        else
-        {
-            // Creating a new file: check write permission on the parent directory
-            string parent = VirtualFileSystem.GetParent(path);
-            var parentNode = _fs.GetNode(parent);
-            if (parentNode != null && !parentNode.CanWrite(_currentUser.Uid, _currentUser.Gid))
-            {
-                Console.WriteLine($"edit: {args[0]}: Permission denied");
-                return;
-            }
-        }
-
-        var editor = new TextEditor(_fs, path, _currentUser.Uid, _currentUser.Gid);
-        editor.Run();
-    }
 
     private void CmdMan(List<string> args)
     {

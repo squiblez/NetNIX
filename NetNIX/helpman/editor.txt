@@ -4,8 +4,11 @@
             editor - nedit text editor guide
 
         OVERVIEW
-            nedit is a nano-style full-screen editor built into NetNIX.
+            nedit is a nano-style full-screen editor for NetNIX.
             Launch it with: edit <filename>
+
+            The editor is implemented as a script command at /bin/edit.cs.
+            You can view or modify its source with: cat /bin/edit.cs
 
         INTERFACE
             ?? Title bar ??? filename, modified status, cursor position ??

@@ -7,8 +7,11 @@
             edit <file>
 
         DESCRIPTION
-            Opens a file in the built-in text editor (nedit). If the file
+            Opens a file in the NetNIX text editor (nedit). If the file
             does not exist, it will be created on first save.
+
+            The editor is installed as a script command at /bin/edit.cs.
+            Its source code can be viewed with: cat /bin/edit.cs
 
         KEYBOARD SHORTCUTS
             F2 / Ctrl+W     Save file

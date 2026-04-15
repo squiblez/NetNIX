@@ -215,6 +215,30 @@ public sealed class NixNet
         int code = Head(url);
         return code >= 200 && code < 300;
     }
+
+    // ?? POST with custom timeout ?????????????????????????????????????
+
+    /// <summary>
+    /// Perform an HTTP POST with a custom timeout (in seconds).
+    /// Creates a dedicated HttpClient for the request so the default
+    /// timeout is not affected. Use for long-running API calls.
+    /// </summary>
+    public string? PostWithTimeout(string url, string body, string contentType, int timeoutSeconds)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            var content = new StringContent(body, Encoding.UTF8, contentType);
+            using var response = client.PostAsync(url, content).GetAwaiter().GetResult();
+            response.EnsureSuccessStatusCode();
+            return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"net: POST {url}: {ex.Message}");
+            return null;
+        }
+    }
 }
 
 /// <summary>

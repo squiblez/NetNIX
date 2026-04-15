@@ -146,6 +146,21 @@ public class KoboldApi
     }
 
     /// <summary>
+    /// Send a prompt with an explicit timeout in seconds.
+    /// Uses a dedicated HTTP client so the default timeout is not affected.
+    /// Intended for long-running generation tasks (e.g. code generation).
+    /// Returns the generated text, or null on failure.
+    /// </summary>
+    public string GenerateWithTimeout(string prompt, int timeoutSeconds)
+    {
+        string url = Endpoint.TrimEnd('/') + "/api/v1/generate";
+        string json = BuildGenerateBody(prompt);
+        string response = _api.Net.PostWithTimeout(url, json, "application/json", timeoutSeconds);
+        if (response == null) return null;
+        return ParseGenerateResponse(response);
+    }
+
+    /// <summary>
     /// Check if the KoboldCpp API is reachable.
     /// </summary>
     public bool IsAvailable()
