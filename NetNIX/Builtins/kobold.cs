@@ -8,7 +8,7 @@ using NetNIX.Scripting;
 #include <koboldlib>
 
 /// <summary>
-/// kobold — Interactive AI chat client for KoboldCpp.
+/// kobold ï¿½ Interactive AI chat client for KoboldCpp.
 ///
 /// Connects to a KoboldCpp (or compatible) text-generation API and
 /// provides an interactive chat session in the terminal.
@@ -69,7 +69,7 @@ public static class KoboldCommand
             return CmdReset(api);
         }
 
-        // --raw "prompt" — raw generation with no system prompt
+        // --raw "prompt" ï¿½ raw generation with no system prompt
         int rawIdx = argList.IndexOf("--raw");
         if (rawIdx >= 0)
         {
@@ -81,7 +81,7 @@ public static class KoboldCommand
             return CmdRaw(api, argList[rawIdx + 1]);
         }
 
-        // -m "message" — single-shot mode
+        // -m "message" ï¿½ single-shot mode
         int msgIdx = argList.IndexOf("-m");
         if (msgIdx < 0) msgIdx = argList.IndexOf("--message");
         if (msgIdx >= 0)
@@ -357,6 +357,7 @@ public static class KoboldCommand
         Console.WriteLine();
         Console.WriteLine("Configurable keys:");
         Console.WriteLine("  endpoint       API base URL");
+        Console.WriteLine("  api_key        API key (sent as Bearer token; leave empty if not needed)");
         Console.WriteLine("  max_context    Max context length (tokens)");
         Console.WriteLine("  max_length     Max generation length (tokens)");
         Console.WriteLine("  temperature    Sampling temperature (0.0-2.0)");
@@ -375,7 +376,7 @@ public static class KoboldCommand
     {
         var validKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            "endpoint", "max_context", "max_length", "temperature",
+            "endpoint", "api_key", "max_context", "max_length", "temperature",
             "top_p", "top_k", "rep_penalty", "timeout", "system_prompt"
         };
 
@@ -387,7 +388,9 @@ public static class KoboldCommand
         }
 
         Settings.Set(api, "kobold", key, value);
-        Console.WriteLine("kobold: " + key + " = " + value);
+        string displayValue = key.Equals("api_key", StringComparison.OrdinalIgnoreCase)
+            ? MaskApiKey(value) : value;
+        Console.WriteLine("kobold: " + key + " = " + displayValue);
         return 0;
     }
 
@@ -396,6 +399,7 @@ public static class KoboldCommand
     private static void PrintSettings(KoboldApi kobold)
     {
         Console.WriteLine("  endpoint       = " + kobold.Endpoint);
+        Console.WriteLine("  api_key        = " + MaskApiKey(kobold.ApiKey));
         Console.WriteLine("  max_context    = " + kobold.MaxContext);
         Console.WriteLine("  max_length     = " + kobold.MaxLength);
         Console.WriteLine("  temperature    = " + kobold.Temperature.ToString(CultureInfo.InvariantCulture));
@@ -411,6 +415,7 @@ public static class KoboldCommand
         Console.WriteLine("  Key              Value                                    Source");
         Console.WriteLine("  ???????????????  ????????????????????????????????????????  ??????????");
         PrintSettingRow(api, "endpoint",      kobold.Endpoint);
+        PrintSettingRow(api, "api_key",       MaskApiKey(kobold.ApiKey));
         PrintSettingRow(api, "max_context",   kobold.MaxContext.ToString());
         PrintSettingRow(api, "max_length",    kobold.MaxLength.ToString());
         PrintSettingRow(api, "temperature",   kobold.Temperature.ToString(CultureInfo.InvariantCulture));
@@ -464,12 +469,14 @@ public static class KoboldCommand
             case "timeout":     if (int.TryParse(value, out int to)) kobold.Timeout = to; break;
             case "system_prompt": kobold.SystemPrompt = value; break;
             case "endpoint":    kobold.Endpoint = value; break;
+            case "api_key":     kobold.ApiKey = value; break;
             default:
                 Console.WriteLine("Unknown setting: " + key);
                 return;
         }
 
-        Console.WriteLine("  " + key + " = " + value + " (session only — use 'kobold --set' to persist)");
+        string displayVal = key == "api_key" ? MaskApiKey(value) : value;
+        Console.WriteLine("  " + key + " = " + displayVal + " (session only ï¿½ use 'kobold --set' to persist)");
     }
 
     private static void HandleSave(NixApi api, KoboldChat chat, string input)
@@ -486,7 +493,7 @@ public static class KoboldCommand
             path = (api.Uid == 0 ? "/root" : "/home/" + api.Username) + path.Substring(1);
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("# KoboldCpp Chat Log — " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+        sb.AppendLine("# KoboldCpp Chat Log ï¿½ " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         sb.AppendLine();
 
         foreach (var (role, text) in chat.History)
@@ -514,9 +521,20 @@ public static class KoboldCommand
         return s.Substring(0, maxLen) + "...";
     }
 
+    private static string MaskApiKey(string key)
+    {
+        if (string.IsNullOrEmpty(key)) return "(not set)";
+        // Keys of 8 characters or fewer are fully masked to avoid revealing the full value
+        const int minLengthForPartialMask = 8;
+        // Show this many characters at the start and end for longer keys
+        const int visibleChars = 4;
+        if (key.Length <= minLengthForPartialMask) return "***";
+        return key.Substring(0, visibleChars) + "..." + key.Substring(key.Length - visibleChars);
+    }
+
     private static void PrintUsage()
     {
-        Console.WriteLine("kobold — AI chat client for KoboldCpp");
+        Console.WriteLine("kobold ï¿½ AI chat client for KoboldCpp");
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  kobold                    Start interactive chat");
@@ -530,6 +548,7 @@ public static class KoboldCommand
         Console.WriteLine();
         Console.WriteLine("Settings (persisted per-user via settingslib):");
         Console.WriteLine("  endpoint       API base URL          (default: http://localhost:5001)");
+        Console.WriteLine("  api_key        API key (Bearer token) (default: not set)");
         Console.WriteLine("  max_context    Max context tokens    (default: 4096)");
         Console.WriteLine("  max_length     Max generation tokens (default: 256)");
         Console.WriteLine("  temperature    Sampling temperature  (default: 0.7)");
@@ -541,6 +560,7 @@ public static class KoboldCommand
         Console.WriteLine();
         Console.WriteLine("Examples:");
         Console.WriteLine("  kobold --set endpoint http://192.168.1.50:5001");
+        Console.WriteLine("  kobold --set api_key sk-my-secret-key");
         Console.WriteLine("  kobold --set temperature 0.9");
         Console.WriteLine("  kobold -m \"What is the meaning of life?\"");
         Console.WriteLine("  kobold --raw \"Once upon a time\"");
