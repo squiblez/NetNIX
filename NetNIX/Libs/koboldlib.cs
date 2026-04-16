@@ -6,7 +6,7 @@ using System.Text;
 using NetNIX.Scripting;
 
 /// <summary>
-/// koboldlib — KoboldCpp REST API client library for NetNIX scripts.
+/// koboldlib ï¿½ KoboldCpp REST API client library for NetNIX scripts.
 ///
 /// Include in your scripts with:
 ///     #include &lt;koboldlib&gt;
@@ -18,6 +18,7 @@ using NetNIX.Scripting;
 ///     App name: "kobold"
 ///
 ///     endpoint       Base URL of the KoboldCpp API (default: http://localhost:5001)
+///     api_key        API key sent as Bearer token   (default: empty / not used)
 ///     max_context    Max context length in tokens   (default: 4096)
 ///     max_length     Max tokens to generate         (default: 256)
 ///     temperature    Sampling temperature 0.0-2.0   (default: 0.7)
@@ -45,10 +46,11 @@ public class KoboldApi
     private readonly NixApi _api;
     internal const string AppName = "kobold";
 
-    // Default values — used when no settings file exists
+    // Default values ï¿½ used when no settings file exists
     internal static readonly Dictionary<string, string> Defaults = new(StringComparer.OrdinalIgnoreCase)
     {
         ["endpoint"]      = "http://localhost:5001",
+        ["api_key"]       = "",
         ["max_context"]   = "4096",
         ["max_length"]    = "256",
         ["temperature"]   = "0.7",
@@ -61,6 +63,7 @@ public class KoboldApi
 
     // Properties
     public string Endpoint { get; set; }
+    public string ApiKey { get; set; }
     public int MaxContext { get; set; }
     public int MaxLength { get; set; }
     public double Temperature { get; set; }
@@ -108,6 +111,7 @@ public class KoboldApi
     public void LoadSettings()
     {
         Endpoint    = GetSetting("endpoint",      Defaults["endpoint"]);
+        ApiKey      = GetSetting("api_key",       Defaults["api_key"]);
         MaxContext   = int.Parse(GetSetting("max_context", Defaults["max_context"]));
         MaxLength    = int.Parse(GetSetting("max_length",  Defaults["max_length"]));
         Temperature  = double.Parse(GetSetting("temperature", Defaults["temperature"]), CultureInfo.InvariantCulture);
@@ -126,7 +130,7 @@ public class KoboldApi
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/generate";
         string json = BuildGenerateBody(prompt);
-        string response = _api.Net.Post(url, json, "application/json");
+        string response = AuthPost(url, json);
         if (response == null) return null;
         return ParseGenerateResponse(response);
     }
@@ -140,7 +144,7 @@ public class KoboldApi
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/generate";
         string json = BuildGenerateBody(prompt);
-        string response = _api.Net.Post(url, json, "application/json");
+        string response = AuthPost(url, json);
         if (response == null) return null;
         return ParseGenerateResponse(response);
     }
@@ -155,7 +159,7 @@ public class KoboldApi
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/generate";
         string json = BuildGenerateBody(prompt);
-        string response = _api.Net.PostWithTimeout(url, json, "application/json", timeoutSeconds);
+        string response = AuthPostWithTimeout(url, json, timeoutSeconds);
         if (response == null) return null;
         return ParseGenerateResponse(response);
     }
@@ -166,7 +170,7 @@ public class KoboldApi
     public bool IsAvailable()
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/model";
-        return _api.Net.IsReachable(url);
+        return AuthIsReachable(url);
     }
 
     /// <summary>
@@ -176,7 +180,7 @@ public class KoboldApi
     public string GetModelName()
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/model";
-        string response = _api.Net.Get(url);
+        string response = AuthGet(url);
         if (response == null) return null;
         return ParseJsonValue(response, "result");
     }
@@ -188,7 +192,7 @@ public class KoboldApi
     public int GetServerMaxContext()
     {
         string url = Endpoint.TrimEnd('/') + "/api/v1/config/max_context_length";
-        string response = _api.Net.Get(url);
+        string response = AuthGet(url);
         if (response == null) return -1;
         string val = ParseJsonValue(response, "value");
         return val != null && int.TryParse(val, out int v) ? v : -1;
@@ -204,6 +208,46 @@ public class KoboldApi
         val = Settings.GetSystem(_api, AppName, key);
         if (val != null) return val;
         return defaultValue;
+    }
+
+    // --- Authenticated HTTP helpers ---
+
+    private (string name, string value)[] AuthHeaders()
+    {
+        if (string.IsNullOrEmpty(ApiKey))
+            return Array.Empty<(string, string)>();
+        return new[] { ("Authorization", "Bearer " + ApiKey) };
+    }
+
+    private string AuthGet(string url)
+    {
+        if (string.IsNullOrEmpty(ApiKey))
+            return _api.Net.Get(url);
+        var resp = _api.Net.Request("GET", url, null, "application/json", AuthHeaders());
+        return resp.IsSuccess ? resp.Body : null;
+    }
+
+    private string AuthPost(string url, string body)
+    {
+        if (string.IsNullOrEmpty(ApiKey))
+            return _api.Net.Post(url, body, "application/json");
+        var resp = _api.Net.Request("POST", url, body, "application/json", AuthHeaders());
+        return resp.IsSuccess ? resp.Body : null;
+    }
+
+    private string AuthPostWithTimeout(string url, string body, int timeoutSeconds)
+    {
+        if (string.IsNullOrEmpty(ApiKey))
+            return _api.Net.PostWithTimeout(url, body, "application/json", timeoutSeconds);
+        return _api.Net.PostWithTimeout(url, body, "application/json", timeoutSeconds, AuthHeaders());
+    }
+
+    private bool AuthIsReachable(string url)
+    {
+        if (string.IsNullOrEmpty(ApiKey))
+            return _api.Net.IsReachable(url);
+        var resp = _api.Net.Request("HEAD", url, null, "application/json", AuthHeaders());
+        return resp.IsSuccess;
     }
 
     // --- JSON construction (manual, no System.Text.Json in sandbox) ---
@@ -312,7 +356,7 @@ public class KoboldApi
             return sb.ToString();
         }
 
-        // If it's a number/bool/null — read until delimiter
+        // If it's a number/bool/null ï¿½ read until delimiter
         var numSb = new StringBuilder();
         while (i < json.Length && json[i] != ',' && json[i] != '}' && json[i] != ']' && !char.IsWhiteSpace(json[i]))
         {
