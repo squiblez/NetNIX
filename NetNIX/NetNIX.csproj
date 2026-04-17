@@ -19,6 +19,12 @@
     <Content Include="Builtins\*.cs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- System builtin scripts (sbin): not compiled, copied to output as content files -->
+  <ItemGroup>
+    <Compile Remove="SystemBuiltins\**" />
+    <Content Include="SystemBuiltins\*.cs" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Builtin libraries: not compiled, copied to output as content files -->
   <ItemGroup>
     <Compile Remove="Libs\**" />
@@ -44,4 +50,4 @@
     </None>
   </ItemGroup>
 
-</Project>
+  </Project>

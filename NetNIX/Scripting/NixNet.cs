@@ -239,6 +239,34 @@ public sealed class NixNet
             return null;
         }
     }
+
+    /// <summary>
+    /// Perform an HTTP POST with a custom timeout and custom headers.
+    /// Creates a dedicated HttpClient so the default timeout is not affected.
+    /// </summary>
+    public string? PostWithTimeout(string url, string body, string contentType, int timeoutSeconds,
+        params (string name, string value)[] headers)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(body, Encoding.UTF8, contentType)
+            };
+            foreach (var (name, value) in headers)
+                request.Headers.TryAddWithoutValidation(name, value);
+
+            using var response = client.SendAsync(request).GetAwaiter().GetResult();
+            response.EnsureSuccessStatusCode();
+            return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"net: POST {url}: {ex.Message}");
+            return null;
+        }
+    }
 }
 
 /// <summary>

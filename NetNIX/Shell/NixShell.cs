@@ -52,7 +52,8 @@ public sealed class NixShell
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"nsh: {ex.Message}");
+                Console.ResetColor();
+                Console.WriteLine($"nsh: unhandled exception: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -134,13 +135,26 @@ public sealed class NixShell
                     break;
             }
         }
-        finally
+        catch (Exception ex)
         {
+            // Restore console state before printing
             if (capture != null)
             {
                 Console.SetOut(originalOut);
-                string output = capture.ToString();
-                string fullPath = VirtualFileSystem.ResolvePath(_cwd, redirectFile!);
+                capture = null;
+            }
+            Console.ResetColor();
+            Console.Error.WriteLine($"nsh: {cmd}: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (capture != null)
+                {
+                    Console.SetOut(originalOut);
+                    string output = capture.ToString();
+                    string fullPath = VirtualFileSystem.ResolvePath(_cwd, redirectFile!);
 
                 // Permission check for redirection target
                 bool allowed = true;
@@ -181,10 +195,17 @@ public sealed class NixShell
                     _fs.Save();
                 }
             }
+            }
+            catch (Exception ex)
+            {
+                Console.SetOut(originalOut);
+                Console.ResetColor();
+                Console.Error.WriteLine($"nsh: redirect error: {ex.GetType().Name}: {ex.Message}");
+            }
         }
     }
 
-    // ?? Builtin commands ???????????????????????????????????????????
+    // —— Builtin commands ———————————————————————————————————————————
 
     private void CmdHelp()
     {
@@ -223,6 +244,7 @@ public sealed class NixShell
             man sandbox              Script sandbox security
             man sandbox.exceptions   Per-script sandbox overrides
             man settingslib          Application settings library
+            man dotnet_lib_emu       .NET System.IO emulation library
             man nshrc                Shell startup scripts
             man daemon               Daemon management commands
             man daemon-writing       How to write daemon scripts

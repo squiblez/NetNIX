@@ -187,7 +187,8 @@ public sealed class VirtualFileSystem
         if (_nodes.ContainsKey(path))
             throw new IOException($"Path already exists: {path}");
 
-        EnsureParentExists(path);
+        if (!EnsureParentExists(path))
+            return null;
 
         var node = new VfsNode(path, true, ownerId, groupId, permissions);
         _nodes[path] = node;
@@ -198,7 +199,8 @@ public sealed class VirtualFileSystem
     public VfsNode CreateFile(string path, int ownerId, int groupId, byte[]? data = null, string permissions = "rw-r--r--")
     {
         path = NormalizePath(path);
-        EnsureParentExists(path);
+        if (!EnsureParentExists(path))
+            return null;
 
         var node = new VfsNode(path, false, ownerId, groupId, permissions)
         {
@@ -248,7 +250,8 @@ public sealed class VirtualFileSystem
         if (!_nodes.ContainsKey(src))
             throw new IOException($"Source not found: {src}");
 
-        EnsureParentExists(dest);
+        if (!EnsureParentExists(dest))
+            return;
 
         var keysToMove = _nodes.Keys.Where(k => k == src || k.StartsWith(src + "/")).ToList();
         var movedPairs = new List<(string oldKey, VfsNode node)>();
@@ -276,7 +279,8 @@ public sealed class VirtualFileSystem
         if (!_nodes.TryGetValue(src, out var srcNode))
             throw new IOException($"Source not found: {src}");
 
-        EnsureParentExists(dest);
+        if (!EnsureParentExists(dest))
+            return;
 
         if (srcNode.IsDirectory)
         {
@@ -323,7 +327,8 @@ public sealed class VirtualFileSystem
         // Create mount point directory if needed
         if (!_nodes.ContainsKey(mountPoint))
         {
-            EnsureParentExists(mountPoint);
+            if (!EnsureParentExists(mountPoint))
+                return -1;
             _nodes[mountPoint] = new VfsNode(mountPoint, true, ownerId, groupId, "rwxr-xr-x");
         }
         else if (!_nodes[mountPoint].IsDirectory)
@@ -496,7 +501,8 @@ public sealed class VirtualFileSystem
             return false;
         }
 
-        EnsureParentExists(vfsPath);
+        if (!EnsureParentExists(vfsPath))
+            return false;
         var node = new VfsNode(vfsPath, false, ownerId, groupId, "rw-r--r--")
         {
             Data = data
@@ -628,12 +634,19 @@ public sealed class VirtualFileSystem
         return idx < 0 ? path : path[(idx + 1)..];
     }
 
-    private void EnsureParentExists(string path)
+    private bool EnsureParentExists(string path)
     {
         string parent = GetParent(path);
         if (!_nodes.ContainsKey(parent))
-            throw new IOException($"Parent directory does not exist: {parent}");
+        {
+            Console.Error.WriteLine($"vfs: parent directory does not exist: {parent}");
+            return false;
+        }
         if (!_nodes[parent].IsDirectory)
-            throw new IOException($"Parent is not a directory: {parent}");
+        {
+            Console.Error.WriteLine($"vfs: parent is not a directory: {parent}");
+            return false;
+        }
+        return true;
     }
 }

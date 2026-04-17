@@ -47,14 +47,10 @@ void Boot()
     }
     else
     {
-        // ── Silent auto-update of factory files on every boot ──────────
-        // Ensures VFS always has the latest scripts, libraries, man pages,
-        // and factory files from the build output, even after an update.
-        FirstRunSetup.InstallBuiltinScripts(fs);
-        FirstRunSetup.InstallBuiltinLibs(fs);
-        FirstRunSetup.InstallManPages(fs);
-        FirstRunSetup.InstallFactoryFiles(fs);
-        fs.Save();
+        // ── Auto-update factory files when the build changes ───────────
+        // Compare the executable's last-write timestamp against a stamp
+        // stored in the VFS. Only reinstall when the binary is newer.
+        SyncFactoryIfBuildChanged(fs);
     }
 
     userMgr.Load();
@@ -101,7 +97,16 @@ void Boot()
 
         // ── Launch shell ───────────────────────────────────────────────
         var shell = new NixShell(fs, userMgr, scriptRunner, daemonMgr, user);
-        shell.Run();
+        try
+        {
+            shell.Run();
+        }
+        catch (Exception ex)
+        {
+            Console.ResetColor();
+            Console.WriteLine($"\nnsh: fatal error: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine("Session terminated. Returning to login.");
+        }
 
         // After shell exits, save and show login again
         fs.Save();
@@ -179,4 +184,55 @@ static string? ReadPassword()
     }
 
     return sb.Length > 0 ? sb.ToString() : null;
+}
+
+// ── Build-stamp sync ───────────────────────────────────────────────
+// Compares a composite stamp (exe + content directories) against a
+// value stored in the VFS. If anything is newer, factory files are
+// reinstalled and the stamp is updated.
+void SyncFactoryIfBuildChanged(VirtualFileSystem fs)
+{
+    const string stampPath = "/etc/.build-stamp";
+
+    string baseDir = AppContext.BaseDirectory;
+    string exePath = Environment.ProcessPath ?? typeof(Program).Assembly.Location;
+
+    // Build a stamp from the most recent write time across the exe
+    // and all content directories that contain builtin files.
+    DateTime newest = File.GetLastWriteTimeUtc(exePath);
+    string[] contentDirs = ["Builtins", "SystemBuiltins", "Libs", "helpman", "Factory"];
+    foreach (var dir in contentDirs)
+    {
+        string full = Path.Combine(baseDir, dir);
+        if (!Directory.Exists(full)) continue;
+        foreach (var file in Directory.GetFiles(full, "*", SearchOption.AllDirectories))
+        {
+            var ft = File.GetLastWriteTimeUtc(file);
+            if (ft > newest) newest = ft;
+        }
+    }
+
+    string currentStamp = newest.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+
+    if (fs.IsFile(stampPath))
+    {
+        string saved = System.Text.Encoding.UTF8.GetString(fs.ReadFile(stampPath)).Trim();
+        if (saved == currentStamp)
+            return; // nothing changed
+    }
+
+    // Something changed — reinstall factory content
+    FirstRunSetup.InstallBuiltinScripts(fs);
+    FirstRunSetup.InstallBuiltinLibs(fs);
+    FirstRunSetup.InstallManPages(fs);
+    FirstRunSetup.InstallFactoryFiles(fs);
+
+    // Update the stamp
+    var stampData = System.Text.Encoding.UTF8.GetBytes(currentStamp);
+    if (fs.IsFile(stampPath))
+        fs.WriteFile(stampPath, stampData);
+    else
+        fs.CreateFile(stampPath, 0, 0, stampData, "rw-------");
+
+    fs.Save();
 }

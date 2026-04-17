@@ -394,9 +394,8 @@ public static class FirstRunSetup
             return;
         }
 
-        foreach (var (name, content) in pages)
+        foreach (var (path, content) in pages)
         {
-            string path = $"/usr/share/man/{name}.txt";
             var data = System.Text.Encoding.UTF8.GetBytes(content);
             if (fs.IsFile(path))
                 fs.WriteFile(path, data);

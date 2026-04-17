@@ -523,6 +523,56 @@ public sealed class NixApi
         return _fs.ImportFromHost(hostPath, resolved, Uid, Gid);
     }
 
+    /// <summary>
+    /// Import a directory (and all its contents recursively) from the host
+    /// filesystem into the VFS. Root only. Returns the number of files
+    /// imported, or -1 on failure.
+    /// </summary>
+    public int ImportDirectory(string hostDir, string vfsDir)
+    {
+        if (!RequireRoot("importfile")) return -1;
+
+        string resolvedVfs = ResolvePath(vfsDir);
+
+        if (!System.IO.Directory.Exists(hostDir))
+        {
+            Console.Error.WriteLine($"importfile: {hostDir}: host directory not found");
+            return -1;
+        }
+
+        return ImportDirectoryRecursive(hostDir, resolvedVfs);
+    }
+
+    private int ImportDirectoryRecursive(string hostDir, string vfsDir)
+    {
+        // Ensure the VFS directory exists
+        if (!_fs.IsDirectory(vfsDir))
+            _fs.CreateDirectory(vfsDir, Uid, Gid, "rwxr-xr-x");
+
+        int count = 0;
+
+        // Import all files in this directory
+        foreach (var file in System.IO.Directory.GetFiles(hostDir))
+        {
+            string fileName = System.IO.Path.GetFileName(file);
+            string vfsPath = vfsDir.TrimEnd('/') + "/" + fileName;
+            if (_fs.ImportFromHost(file, vfsPath, Uid, Gid))
+                count++;
+        }
+
+        // Recurse into subdirectories
+        foreach (var subDir in System.IO.Directory.GetDirectories(hostDir))
+        {
+            string dirName = System.IO.Path.GetFileName(subDir);
+            string vfsSubDir = vfsDir.TrimEnd('/') + "/" + dirName;
+            int sub = ImportDirectoryRecursive(subDir, vfsSubDir);
+            if (sub >= 0)
+                count += sub;
+        }
+
+        return count;
+    }
+
     // ?? Export ??????????????????????????????????????????????????????
 
     /// <summary>

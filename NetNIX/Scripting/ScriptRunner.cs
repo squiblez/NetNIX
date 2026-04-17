@@ -169,11 +169,13 @@ public sealed class ScriptRunner
         }
         catch (TargetInvocationException ex) when (ex.InnerException != null)
         {
-            Console.WriteLine($"nsh: {label}: {ex.InnerException.Message}");
+            Console.ResetColor();
+            Console.Error.WriteLine($"nsh: {label}: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"nsh: {label}: {ex.Message}");
+            Console.ResetColor();
+            Console.Error.WriteLine($"nsh: {label}: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
