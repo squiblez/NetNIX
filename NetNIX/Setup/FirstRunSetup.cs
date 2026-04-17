@@ -454,6 +454,11 @@ public static class FirstRunSetup
 
     private static string? ReadPassword()
     {
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine();
+        }
+
         var sb = new System.Text.StringBuilder();
         while (true)
         {

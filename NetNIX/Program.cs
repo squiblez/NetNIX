@@ -1,17 +1,17 @@
 ﻿// See https://aka.ms/new-console-template for more information
+using NetNIX.Config;
 using NetNIX.Scripting;
 using NetNIX.Setup;
 using NetNIX.Shell;
 using NetNIX.Users;
 using NetNIX.VFS;
 
-// ── Determine filesystem archive path ──────────────────────────────
-string dataDir = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-    "NetNIX");
+// ── Load host-side configuration ───────────────────────────────────
+var config = new NxConfig();
+string archivePath = config.ResolveRootfsPath();
 
-Directory.CreateDirectory(dataDir);
-string archivePath = Path.Combine(dataDir, "rootfs.zip");
+// Ensure the directory for the rootfs exists
+Directory.CreateDirectory(Path.GetDirectoryName(archivePath)!);
 
 Boot();
 
@@ -23,18 +23,37 @@ void Boot()
 
     var userMgr = new UserManager(fs);
 
-    // ── Boot banner with reset option ──────────────────────────────────
-    Console.WriteLine("╔════════════════════════════════════════════╗");
-    Console.WriteLine("║              NetNIX Booting...             ║");
-    Console.WriteLine("║    Press Ctrl+R within 3s to reset env    ║");
-    Console.WriteLine("╚════════════════════════════════════════════╝");
-
-    if (WaitForResetKey(TimeSpan.FromSeconds(3)))
+    // ── Boot banner ────────────────────────────────────────────────────
+    if (config.ShowBootBanner)
     {
-        if (ConfirmAndReset(fs, userMgr))
+        string name = config.InstanceName;
+        // Center the instance name in a 44-char box
+        string nameLine = name.Length > 40 ? name[..40] : name;
+        int pad = (42 - nameLine.Length) / 2;
+        string centered = new string(' ', pad) + nameLine + new string(' ', 42 - pad - nameLine.Length);
+
+        Console.WriteLine("╔════════════════════════════════════════════╗");
+        Console.WriteLine($"║ {centered} ║");
+        if (config.AllowReset)
         {
-            Boot();
-            return;
+            int secs = config.BootTimeout;
+            string resetLine = $"Press Ctrl+R within {secs}s to reset env";
+            int rpad = (42 - resetLine.Length) / 2;
+            string rcentered = new string(' ', rpad) + resetLine + new string(' ', 42 - rpad - resetLine.Length);
+            Console.WriteLine($"║ {rcentered} ║");
+        }
+        Console.WriteLine("╚════════════════════════════════════════════╝");
+    }
+
+    if (config.AllowReset && config.BootTimeout > 0)
+    {
+        if (WaitForResetKey(TimeSpan.FromSeconds(config.BootTimeout)))
+        {
+            if (ConfirmAndReset(fs, userMgr))
+            {
+                Boot();
+                return;
+            }
         }
     }
 
@@ -60,7 +79,7 @@ void Boot()
     var daemonMgr = new NetNIX.Scripting.DaemonManager(fs, userMgr, scriptRunner);
 
     // ── Display MOTD ───────────────────────────────────────────────────
-    if (fs.IsFile("/etc/motd"))
+    if (config.MotdEnabled && fs.IsFile("/etc/motd"))
     {
         Console.WriteLine(System.Text.Encoding.UTF8.GetString(fs.ReadFile("/etc/motd")));
     }
@@ -68,13 +87,13 @@ void Boot()
     // ── Login loop ─────────────────────────────────────────────────────
     while (true)
     {
-        Console.WriteLine("─── NetNIX Login ───");
+        Console.WriteLine($"─── {config.LoginBanner} ───");
         Console.Write("login: ");
         string? username = Console.ReadLine()?.Trim();
         if (string.IsNullOrEmpty(username)) continue;
 
         // ── Secret reset username ──────────────────────────────────────
-        if (username == "__reset__")
+        if (username == "__reset__" && config.AllowReset)
         {
             if (ConfirmAndReset(fs, userMgr))
             {
@@ -109,7 +128,8 @@ void Boot()
         }
 
         // After shell exits, save and show login again
-        fs.Save();
+        if (config.AutoSave)
+            fs.Save();
         Console.WriteLine($"\n{username} logged out.\n");
     }
 }
@@ -161,6 +181,11 @@ bool ConfirmAndReset(VirtualFileSystem fs, UserManager userMgr)
 // ── Masked password input ──────────────────────────────────────────
 static string? ReadPassword()
 {
+    if (Console.IsInputRedirected)
+    {
+        return Console.ReadLine();
+    }
+
     var sb = new System.Text.StringBuilder();
     while (true)
     {
@@ -190,9 +215,9 @@ static string? ReadPassword()
 }
 
 // ── Build-stamp sync ───────────────────────────────────────────────
-// Compares a composite stamp (exe + content directories) against a
-// value stored in the VFS. If anything is newer, factory files are
-// reinstalled and the stamp is updated.
+// Computes a content hash across the exe and all shipped content
+// directories. Only reinstalls factory files when actual content changes,
+// not when timestamps shift (antivirus, copies, etc).
 void SyncFactoryIfBuildChanged(VirtualFileSystem fs)
 {
     const string stampPath = "/etc/.build-stamp";
@@ -200,22 +225,34 @@ void SyncFactoryIfBuildChanged(VirtualFileSystem fs)
     string baseDir = AppContext.BaseDirectory;
     string exePath = Environment.ProcessPath ?? typeof(Program).Assembly.Location;
 
-    // Build a stamp from the most recent write time across the exe
-    // and all content directories that contain builtin files.
-    DateTime newest = File.GetLastWriteTimeUtc(exePath);
+    // Build a SHA-256 hash from the content of the exe and all shipped files.
+    using var sha = System.Security.Cryptography.SHA256.Create();
+    using var hashStream = System.Security.Cryptography.IncrementalHash.CreateHash(
+        System.Security.Cryptography.HashAlgorithmName.SHA256);
+
+    // Hash the executable itself
+    if (File.Exists(exePath))
+        hashStream.AppendData(File.ReadAllBytes(exePath));
+
+    // Hash all content directories in sorted order for determinism
     string[] contentDirs = ["Builtins", "SystemBuiltins", "Libs", "helpman", "Factory"];
     foreach (var dir in contentDirs)
     {
         string full = Path.Combine(baseDir, dir);
         if (!Directory.Exists(full)) continue;
-        foreach (var file in Directory.GetFiles(full, "*", SearchOption.AllDirectories))
+        var files = Directory.GetFiles(full, "*", SearchOption.AllDirectories);
+        Array.Sort(files, StringComparer.Ordinal);
+        foreach (var file in files)
         {
-            var ft = File.GetLastWriteTimeUtc(file);
-            if (ft > newest) newest = ft;
+            // Include the relative path so renames are detected
+            string rel = Path.GetRelativePath(baseDir, file);
+            hashStream.AppendData(System.Text.Encoding.UTF8.GetBytes(rel));
+            hashStream.AppendData(File.ReadAllBytes(file));
         }
     }
 
-    string currentStamp = newest.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+    byte[] hashBytes = hashStream.GetHashAndReset();
+    string currentStamp = Convert.ToHexString(hashBytes);
 
     if (fs.IsFile(stampPath))
     {

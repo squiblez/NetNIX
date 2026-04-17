@@ -763,6 +763,11 @@ public sealed class NixShell
 
     private static string? ReadPassword()
     {
+        if (Console.IsInputRedirected)
+        {
+            return Console.ReadLine();
+        }
+
         var sb = new StringBuilder();
         while (true)
         {
