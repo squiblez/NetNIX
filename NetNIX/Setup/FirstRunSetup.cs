@@ -8,7 +8,7 @@ using NetNIX.Users;
 using NetNIX.VFS;
 
 namespace NetNIX.Setup;
-
+//V2
 /// <summary>
 /// First-run setup wizard. Initialises the virtual file system, creates the
 /// standard directory tree and the root account.

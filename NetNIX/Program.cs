@@ -32,23 +32,44 @@ void Boot()
     // ── Boot banner ────────────────────────────────────────────────────
     if (config.ShowBootBanner)
     {
-        string name = config.InstanceName;
-        // Center the instance name in a 44-char box
-        string nameLine = name.Length > 40 ? name[..40] : name;
-        int pad = (42 - nameLine.Length) / 2;
-        string centered = new string(' ', pad) + nameLine + new string(' ', 42 - pad - nameLine.Length);
+        const int boxWidth = 58; // inner width between the ║ characters
+        const string border = "══════════════════════════════════════════════════════════";
 
-        Console.WriteLine("╔════════════════════════════════════════════╗");
-        Console.WriteLine($"║ {centered} ║");
+        static string CenterLine(string text, int width)
+        {
+            if (text.Length >= width) return text[..width];
+            int pad = (width - text.Length) / 2;
+            return new string(' ', pad) + text + new string(' ', width - pad - text.Length);
+        }
+
+        string name = config.InstanceName;
+        if (name.Length > boxWidth - 2) name = name[..(boxWidth - 2)];
+
+        Console.WriteLine();
+        Console.WriteLine($"╔{border}╗");
+        Console.WriteLine($"║{CenterLine("", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("███╗   ██╗███████╗████████╗███╗   ██╗██╗██╗  ██╗", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("████╗  ██║██╔════╝╚══██╔══╝████╗  ██║██║╚██╗██╔╝", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("██╔██╗ ██║█████╗     ██║   ██╔██╗ ██║██║ ╚███╔╝ ", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("██║╚██╗██║██╔══╝     ██║   ██║╚██╗██║██║ ██╔██╗ ", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("██║ ╚████║███████╗   ██║   ██║ ╚████║██║██╔╝ ██╗", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("A .NET-Powered Virtual UNIX Environment", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("", boxWidth)}║");
+        Console.WriteLine($"╠{border}╣");
+        Console.WriteLine($"║{CenterLine($"Machine: {name}", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine("", boxWidth)}║");
+        Console.WriteLine($"║  Web:    netnix.controlfeed.info{new string(' ', boxWidth - 34)}║");
+        Console.WriteLine($"║  Source: github.com/squiblez/NetNIX{new string(' ', boxWidth - 37)}║");
+        Console.WriteLine($"║{CenterLine("", boxWidth)}║");
         if (config.AllowReset)
         {
-            int secs = config.BootTimeout;
-            string resetLine = $"Press Ctrl+R within {secs}s to reset env";
-            int rpad = (42 - resetLine.Length) / 2;
-            string rcentered = new string(' ', rpad) + resetLine + new string(' ', 42 - rpad - resetLine.Length);
-            Console.WriteLine($"║ {rcentered} ║");
+            string resetLine = $"Press Ctrl+R within {config.BootTimeout}s to reset environment";
+            Console.WriteLine($"║{CenterLine(resetLine, boxWidth)}║");
         }
-        Console.WriteLine("╚════════════════════════════════════════════╝");
+        Console.WriteLine($"╚{border}╝");
+        Console.WriteLine();
     }
 
     if (config.AllowReset && config.BootTimeout > 0)
