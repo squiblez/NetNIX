@@ -267,6 +267,13 @@ void SyncFactoryIfBuildChanged(VirtualFileSystem fs)
     FirstRunSetup.InstallManPages(fs);
     FirstRunSetup.InstallFactoryFiles(fs);
 
+    // Update sandbox exceptions with current defaults
+    var exceptionsData = System.Text.Encoding.UTF8.GetBytes(NetNIX.Scripting.ScriptRunner.DefaultSandboxExceptions);
+    if (fs.IsFile("/etc/sandbox.exceptions"))
+        fs.WriteFile("/etc/sandbox.exceptions", exceptionsData);
+    else
+        fs.CreateFile("/etc/sandbox.exceptions", 0, 0, exceptionsData, "rw-r-----");
+
     // Update the stamp
     var stampData = System.Text.Encoding.UTF8.GetBytes(currentStamp);
     if (fs.IsFile(stampPath))

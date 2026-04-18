@@ -430,10 +430,16 @@ public static class FirstRunSetup
             // covered by GetDirectories, e.g. deeply nested paths)
             EnsureParentDirs(fs, path);
 
+            // Files in /bin/ or /sbin/ should be executable
+            string perms = (path.StartsWith("/bin/") || path.StartsWith("/sbin/") ||
+                            path.StartsWith("/usr/bin/") || path.StartsWith("/usr/sbin/") ||
+                            path.StartsWith("/usr/local/bin/") || path.EndsWith(".sh"))
+                ? "rwxr-xr-x" : "rw-r--r--";
+
             if (fs.IsFile(path))
                 fs.WriteFile(path, data);
             else
-                fs.CreateFile(path, 0, 0, data, "rw-r--r--");
+                fs.CreateFile(path, 0, 0, data, perms);
         }
 
         Console.WriteLine($"  Installed {files.Count} factory file(s)");
