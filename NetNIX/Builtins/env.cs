@@ -12,6 +12,7 @@ public static class EnvCommand
         Console.WriteLine($"PWD={api.Cwd}");
         Console.WriteLine($"SHELL=/bin/nsh");
         Console.WriteLine($"HOSTNAME=netnix");
+        Console.WriteLine($"VERSION={api.Version}");
         Console.WriteLine($"PATH=/bin:/usr/bin:/usr/local/bin");
         Console.WriteLine($"TERM=netnix-256color");
         return 0;

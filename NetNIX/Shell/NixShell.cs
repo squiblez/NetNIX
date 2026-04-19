@@ -1982,6 +1982,7 @@ public sealed class NixShell
         sb.Replace("$PWD", _cwd);
         sb.Replace("$SHELL", "/bin/nsh");
         sb.Replace("$HOSTNAME", "netnix");
+        sb.Replace("$VERSION", NixApi.SystemVersion);
         sb.Replace("~", _currentUser.HomeDirectory);
         return sb.ToString();
     }

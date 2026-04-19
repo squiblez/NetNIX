@@ -35,8 +35,14 @@ void Boot()
     // ── Boot banner ────────────────────────────────────────────────────
     if (config.ShowBootBanner)
     {
-        const int boxWidth = 58; // inner width between the ║ characters
-        const string border = "══════════════════════════════════════════════════════════";
+        const int boxWidth = 54; // inner width between the ║ characters
+        const string border = "══════════════════════════════════════════════════════";
+
+        static string PadRight(string text, int width)
+        {
+            if (text.Length >= width) return text[..width];
+            return text + new string(' ', width - text.Length);
+        }
 
         static string CenterLine(string text, int width)
         {
@@ -59,12 +65,13 @@ void Boot()
         Console.WriteLine($"║{CenterLine("╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝╚═╝  ╚═╝", boxWidth)}║");
         Console.WriteLine($"║{CenterLine("", boxWidth)}║");
         Console.WriteLine($"║{CenterLine("A .NET-Powered Virtual UNIX Environment", boxWidth)}║");
+        Console.WriteLine($"║{CenterLine($"v{NixApi.SystemVersion}", boxWidth)}║");
         Console.WriteLine($"║{CenterLine("", boxWidth)}║");
         Console.WriteLine($"╠{border}╣");
         Console.WriteLine($"║{CenterLine($"Machine: {name}", boxWidth)}║");
         Console.WriteLine($"║{CenterLine("", boxWidth)}║");
-        Console.WriteLine($"║  Web:    netnix.controlfeed.info{new string(' ', boxWidth - 34)}║");
-        Console.WriteLine($"║  Source: github.com/squiblez/NetNIX{new string(' ', boxWidth - 37)}║");
+        Console.WriteLine($"║{PadRight("  Web:    netnix.controlfeed.info", boxWidth)}║");
+        Console.WriteLine($"║{PadRight("  Source: github.com/squiblez/NetNIX", boxWidth)}║");
         Console.WriteLine($"║{CenterLine("", boxWidth)}║");
         if (config.AllowReset)
         {

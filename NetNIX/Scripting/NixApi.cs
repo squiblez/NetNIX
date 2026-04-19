@@ -17,6 +17,13 @@ namespace NetNIX.Scripting;
 /// </summary>
 public sealed class NixApi
 {
+    /// <summary>
+    /// The current NetNIX system version. This is the single source of truth
+    /// for the version number across the entire system. Scripts can read it
+    /// via api.Version, shell scripts via $VERSION, and users via uname -r.
+    /// </summary>
+    public const string SystemVersion = "0.0.6";
+
     private readonly VirtualFileSystem _fs;
     private readonly UserManager _userMgr;
     private ScriptRunner? _scriptRunner;
@@ -26,6 +33,9 @@ public sealed class NixApi
     public int Gid { get; }
     public string Username { get; }
     public string Cwd { get; }
+
+    /// <summary>The NetNIX system version string (e.g. "0.0.6").</summary>
+    public string Version => SystemVersion;
 
     /// <summary>
     /// Cancellation token for daemon scripts. Check this to support graceful shutdown.
