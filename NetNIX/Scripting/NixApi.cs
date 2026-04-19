@@ -19,6 +19,8 @@ public sealed class NixApi
 {
     private readonly VirtualFileSystem _fs;
     private readonly UserManager _userMgr;
+    private ScriptRunner? _scriptRunner;
+    private DaemonManager? _daemonMgr;
 
     public int Uid { get; }
     public int Gid { get; }
@@ -302,6 +304,35 @@ public sealed class NixApi
             return;
         }
         _fs.Delete(resolved);
+    }
+
+    /// <summary>
+    /// Change the permissions of a file or directory.
+    /// Only root or the file owner can change permissions.
+    /// </summary>
+    /// <param name="path">VFS path to the file or directory.</param>
+    /// <param name="permissions">Permission string, e.g. "rw-r-----" or "rwxr-xr-x".</param>
+    public bool Chmod(string path, string permissions)
+    {
+        string resolved = ResolvePath(path);
+        var node = _fs.GetNode(resolved);
+        if (node == null)
+        {
+            Console.WriteLine($"chmod: {path}: No such file or directory");
+            return false;
+        }
+        if (Uid != 0 && node.OwnerId != Uid)
+        {
+            Console.WriteLine($"chmod: {path}: Permission denied");
+            return false;
+        }
+        if (permissions.Length != 9)
+        {
+            Console.WriteLine($"chmod: invalid permission string '{permissions}'");
+            return false;
+        }
+        node.Permissions = permissions;
+        return true;
     }
 
     public void Copy(string src, string dest)
@@ -611,9 +642,41 @@ public sealed class NixApi
         return true;
     }
 
-    // ?? Save ???????????????????????????????????????????????????????
+    // ── Save ───────────────────────────────────────────────────────
 
     public void Save() => _fs.Save();
+
+    // ── Internal accessors (for daemon session spawning) ───────────
+
+    /// <summary>
+    /// Authenticate a user by username and password.
+    /// Returns the UserRecord on success, or null on failure.
+    /// Used by daemons that need to run their own login loops (e.g. telnetd).
+    /// </summary>
+    public UserRecord? AuthenticateUser(string username, string password) =>
+        _userMgr.Authenticate(username, password);
+
+    /// <summary>Returns the underlying VFS instance. For daemon session spawning.</summary>
+    public VirtualFileSystem GetFileSystem() => _fs;
+
+    /// <summary>Returns the underlying UserManager. For daemon session spawning.</summary>
+    public UserManager GetUserManager() => _userMgr;
+
+    /// <summary>Returns the ScriptRunner for this environment, if set.</summary>
+    public ScriptRunner? GetScriptRunner() => _scriptRunner;
+
+    /// <summary>Returns the DaemonManager for this environment, if set.</summary>
+    public DaemonManager? GetDaemonManager() => _daemonMgr;
+
+    /// <summary>
+    /// Set references to the ScriptRunner and DaemonManager.
+    /// Called during environment initialisation so daemons can spawn full shell sessions.
+    /// </summary>
+    public void SetRuntime(ScriptRunner scriptRunner, DaemonManager daemonMgr)
+    {
+        _scriptRunner = scriptRunner;
+        _daemonMgr = daemonMgr;
+    }
 
     // ?? Networking ?????????????????????????????????????????????????
 
@@ -1009,5 +1072,72 @@ public sealed class NixApi
         {
             return false;
         }
+    }
+
+    // ── Host-side logging ──────────────────────────────────────────
+
+    private static readonly string HostLogDir =
+        Path.Combine(AppContext.BaseDirectory, "logs");
+
+    private static readonly object _hostLogLock = new();
+
+    /// <summary>
+    /// Append a timestamped message to a log file on the host filesystem.
+    /// Logs are written to a "logs/" directory next to the NetNIX executable.
+    /// The <paramref name="category"/> determines the filename (e.g. "telnetd"
+    /// writes to logs/telnetd.log, "telnetd-admin" writes to logs/telnetd-admin.log).
+    ///
+    /// This is safe for scripts to call — it only writes to the controlled
+    /// logs/ directory, not arbitrary host paths.
+    /// </summary>
+    public void HostLog(string category, string message)
+    {
+        try
+        {
+            // Sanitise category to prevent path traversal
+            string safe = SanitiseLogCategory(category);
+            if (safe.Length == 0) return;
+
+            lock (_hostLogLock)
+            {
+                Directory.CreateDirectory(HostLogDir);
+                string path = Path.Combine(HostLogDir, safe + ".log");
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                File.AppendAllText(path, $"[{timestamp}] {message}\n");
+            }
+        }
+        catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Append raw text (no timestamp) to a host log file.
+    /// Useful for session transcript logging where the caller controls format.
+    /// </summary>
+    public void HostLogRaw(string category, string text)
+    {
+        try
+        {
+            string safe = SanitiseLogCategory(category);
+            if (safe.Length == 0) return;
+
+            lock (_hostLogLock)
+            {
+                Directory.CreateDirectory(HostLogDir);
+                string path = Path.Combine(HostLogDir, safe + ".log");
+                File.AppendAllText(path, text);
+            }
+        }
+        catch { /* best effort */ }
+    }
+
+    private static string SanitiseLogCategory(string category)
+    {
+        var sb = new StringBuilder(category.Length);
+        foreach (char c in category)
+        {
+            if (char.IsLetterOrDigit(c) || c == '-' || c == '_' || c == '.')
+                sb.Append(c);
+        }
+        return sb.ToString();
     }
 }

@@ -1,0 +1,186 @@
+TELNETD(8)                  System Administration                  TELNETD(8)
+
+NAME
+    telnetd — Telnet server daemon for remote multi-user access
+
+SYNOPSIS
+    daemon start telnetd /sbin/telnetd.cs [port]
+    daemon stop telnetd
+
+DESCRIPTION
+    telnetd is a Telnet server daemon that allows remote users to connect
+    to the NetNIX environment over the network using any standard Telnet
+    client. Multiple simultaneous connections are supported — each
+    connection gets its own login prompt and full shell session, all
+    sharing the same virtual filesystem.
+
+    When started, telnetd listens on the specified TCP port (default 2323)
+    and waits for incoming connections. Each connection receives a login
+    prompt. After successful authentication, the user gets a full nsh
+    shell session with access to all commands, scripts, and features.
+
+    Sessions are fully isolated — each runs on its own thread with
+    independent I/O streams. Multiple users (or the same user from
+    different terminals) can be logged in simultaneously.
+
+OPTIONS
+    port    TCP port to listen on (overrides config, default: 2323)
+
+CONFIGURATION
+    telnetd reads its settings from /etc/telnetd.conf. A default
+    configuration file is created automatically on first run.
+    Root can edit this file to customise daemon behaviour. Changes
+    take effect on the next daemon restart.
+
+    Settings:
+
+        port              TCP port (default 2323)
+        terminal_width    Terminal columns (default 80)
+        terminal_height   Terminal rows (default 24)
+        max_sessions      Max concurrent sessions, 0=unlimited (default 8)
+        max_login_attempts  Failed logins before disconnect (default 5)
+        idle_timeout      Idle timeout in minutes, 0=none (default 30)
+        login_banner      Banner shown on connect (default "NetNIX Remote Access")
+        welcome_message   Post-login message, supports {user} and {session}
+
+    Logging settings:
+
+        log_events        Log daemon events to VFS (default true)
+                          Writes to /var/log/telnetd.log
+        log_sessions      Log per-user session activity to VFS (default false)
+                          Writes to /var/log/telnetd/<user>.log
+        host_log_events   Log daemon events to host filesystem (default false)
+                          Writes to logs/telnetd.log
+        host_log_sessions Log per-user sessions to host filesystem (default false)
+                          Writes to logs/telnetd-<user>.log
+
+    VFS logs are viewable by root inside the NetNIX environment.
+    Host logs are written to the logs/ directory next to the NetNIX
+    executable, accessible to the host machine operator.
+
+    Example /etc/telnetd.conf:
+
+        port = 2323
+        terminal_width = 120
+        terminal_height = 40
+        max_sessions = 16
+        max_login_attempts = 3
+        idle_timeout = 60
+        login_banner = My Server
+        welcome_message = Hello {user}, you are session #{session}
+        log_events = true
+        log_sessions = true
+        host_log_events = true
+        host_log_sessions = true
+
+    A command-line port argument overrides the config file port.
+
+SETUP
+    The telnetd sandbox exceptions are enabled by default on new
+    installations. If you have an older environment, ensure the
+    following lines are present (uncommented) in /etc/sandbox.exceptions:
+
+        telnetd  System.Net
+        telnetd  System.Net.Sockets
+        telnetd  System.IO
+        telnetd  TcpListener(
+        telnetd  TcpClient(
+        telnetd  Socket(
+
+    Then start the daemon:
+
+        sudo daemon start telnetd /sbin/telnetd.cs
+        sudo daemon start telnetd /sbin/telnetd.cs 2323
+
+PLATFORM SUPPORT
+    telnetd is fully cross-platform and works on:
+      - Windows (Windows 10/11, Server 2016+)
+      - Linux (any distro with .NET 8 runtime)
+      - macOS (with .NET 8 runtime)
+
+    No platform-specific configuration is required. The daemon uses
+    standard .NET System.Net.Sockets APIs that work identically across
+    all supported operating systems.
+
+    On Linux, ports below 1024 require root privileges on the host OS.
+    The default port 2323 does not require elevated host privileges.
+
+CONNECTING
+    From any machine on the network, use a Telnet client:
+
+        telnet <host> 2323
+
+    On Windows:
+        Open Command Prompt or PowerShell and run:
+            telnet localhost 2323
+
+        If the telnet command is not found, enable it:
+            Control Panel > Programs > Turn Windows features on/off
+            Check "Telnet Client"
+
+    On Linux/macOS:
+        telnet localhost 2323
+
+    Or use PuTTY, Tera Term, or any other Telnet-capable terminal.
+
+FEATURES
+    - Full nsh shell access for remote users
+    - Multi-user support (multiple simultaneous connections)
+    - Login authentication using NetNIX user accounts
+    - Configurable session limits, idle timeout, and login attempts
+    - Configurable terminal dimensions for editor and pager
+    - Customisable login banner and welcome message
+    - Backspace/delete handling
+    - Telnet protocol negotiation (IAC sequences, NAWS)
+    - Session logging to /var/log/telnetd.log
+    - ANSI terminal support (colors, clear screen)
+    - Graceful handling of client disconnections
+
+LIMITATIONS
+    - Password input is visible on some Telnet clients that ignore
+      server-side echo suppression. This is a Telnet protocol limitation.
+    - Console.ReadKey() is not available in remote sessions (the shell
+      falls back to line-based input for password prompts and paging).
+    - Console.Clear() uses ANSI escape codes instead of the native
+      console clear for remote sessions.
+    - Interactive features like the boot reset (Ctrl+R) are not
+      available to remote sessions.
+
+LOGGING
+    All connection, login, and disconnection events are logged to:
+        /var/log/telnetd.log
+
+    View the log:
+        cat /var/log/telnetd.log
+        tail /var/log/telnetd.log
+
+SECURITY
+    - telnetd requires root to start (via daemon command)
+    - All users must authenticate with their NetNIX password
+    - Failed logins are logged with the remote IP address
+    - After 5 failed login attempts, the connection is dropped
+    - The Telnet protocol does NOT encrypt traffic. For use on
+      trusted networks only. Do not expose to the public internet
+      with sensitive data.
+
+DAEMON MANAGEMENT
+    Start:      daemon start telnetd /sbin/telnetd.cs [port]
+    Stop:       daemon stop telnetd
+    Status:     daemon list
+    Log:        daemon log telnetd
+
+EXAMPLES
+    Start telnetd on the default port (2323):
+        sudo daemon start telnetd /sbin/telnetd.cs
+
+    Start telnetd on port 8023:
+        sudo daemon start telnetd /sbin/telnetd.cs 8023
+
+    Stop the daemon:
+        sudo daemon stop telnetd
+
+    Check if it's running:
+        daemon list
+
+SEE ALSO
+    daemon(1), httpd(8), sandbox.exceptions(5)

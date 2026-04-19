@@ -16,6 +16,9 @@ using NetNIX.VFS;
 var config = new NxConfig();
 string archivePath = config.ResolveRootfsPath();
 
+// ── Install thread-aware I/O for multi-session support ─────────────
+NetNIX.Shell.SessionIO.Install();
+
 // Ensure the directory for the rootfs exists
 Directory.CreateDirectory(Path.GetDirectoryName(archivePath)!);
 

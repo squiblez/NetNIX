@@ -13,6 +13,7 @@ namespace NetNIX.Shell;
 
 /// <summary>
 /// Interactive UNIX-like shell (nsh — NetNIX Shell).
+/// Supports both local console and remote (Telnet) sessions.
 /// </summary>
 public sealed class NixShell
 {
@@ -23,25 +24,36 @@ public sealed class NixShell
     private UserRecord _currentUser;
     private string _cwd;
     private bool _running = true;
+    private readonly bool _isRemote;
 
     /// <summary>
     /// True when the current command is receiving piped input.
     /// Scripts can check this to determine if stdin has data.
     /// </summary>
-    public static bool IsPiped { get; set; }
+    [ThreadStatic]
+    public static bool IsPiped;
 
-    public NixShell(VirtualFileSystem fs, UserManager userMgr, ScriptRunner scriptRunner, DaemonManager daemonMgr, UserRecord user)
+    public NixShell(VirtualFileSystem fs, UserManager userMgr, ScriptRunner scriptRunner, DaemonManager daemonMgr, UserRecord user, bool isRemote = false)
     {
         _fs = fs;
         _userMgr = userMgr;
         _scriptRunner = scriptRunner;
         _daemonMgr = daemonMgr;
         _currentUser = user;
+        _isRemote = isRemote;
         _cwd = user.HomeDirectory;
 
         if (!_fs.Exists(_cwd))
             _cwd = "/";
     }
+
+    /// <summary>
+    /// Convenience accessors — route through SessionIO so each session
+    /// (local console or Telnet) reads/writes to its own streams without
+    /// holding a process-wide Console lock.
+    /// </summary>
+    private TextWriter Out => SessionIO.Out;
+    private TextReader In => SessionIO.In;
 
     public void Run()
     {
@@ -50,22 +62,25 @@ public sealed class NixShell
 
         while (_running)
         {
-            string prompt = _currentUser.Uid == 0 ? "#" : "$";
-            Console.Write($"{_currentUser.Username}@netnix:{_cwd}{prompt} ");
-            string? input = Console.ReadLine();
-            if (input == null) break;
-
-            input = input.Trim();
-            if (input.Length == 0) continue;
-
             try
             {
+                string prompt = _currentUser.Uid == 0 ? "#" : "$";
+                Out.Write($"{_currentUser.Username}@netnix:{_cwd}{prompt} ");
+                Out.Flush();
+
+                string? input = In.ReadLine();
+                if (input == null) break;
+
+                input = input.Trim();
+                if (input.Length == 0) continue;
+
                 ExecuteLine(input);
             }
             catch (Exception ex)
             {
-                Console.ResetColor();
-                Console.WriteLine($"nsh: unhandled exception: {ex.GetType().Name}: {ex.Message}");
+                if (_isRemote && !_running) break;
+                try { Console.ResetColor(); } catch { }
+                Out.WriteLine($"nsh: unhandled exception: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -90,8 +105,8 @@ public sealed class NixShell
         }
 
         // Pipeline: capture stdout of each stage, feed as stdin to the next
-        TextWriter originalOut = Console.Out;
-        TextReader originalIn = Console.In;
+        TextWriter originalOut = Out;
+        TextReader originalIn = In;
         string previousOutput = null;
 
         try
@@ -106,7 +121,7 @@ public sealed class NixShell
                 // Feed previous command's output as this command's stdin
                 if (previousOutput != null)
                 {
-                    Console.SetIn(new StringReader(previousOutput));
+                    SessionIO.Enter(new StringReader(previousOutput), Out, _isRemote);
                     IsPiped = true;
                 }
                 else
@@ -119,12 +134,12 @@ public sealed class NixShell
                 if (!isLast)
                 {
                     stageCapture = new StringWriter();
-                    Console.SetOut(stageCapture);
+                    SessionIO.Enter(In, stageCapture, _isRemote);
                 }
                 else
                 {
-                    // Last stage writes to the real console (or redirect handles it)
-                    Console.SetOut(originalOut);
+                    // Last stage writes to the real session output
+                    SessionIO.Enter(In, originalOut, _isRemote);
                 }
 
                 try
@@ -133,16 +148,15 @@ public sealed class NixShell
                 }
                 catch (Exception ex)
                 {
-                    Console.SetOut(originalOut);
-                    Console.SetIn(originalIn);
-                    Console.ResetColor();
-                    Console.Error.WriteLine($"nsh: pipe stage {i + 1}: {ex.GetType().Name}: {ex.Message}");
+                    SessionIO.Enter(originalIn, originalOut, _isRemote);
+                    try { Console.ResetColor(); } catch { }
+                    originalOut.WriteLine($"nsh: pipe stage {i + 1}: {ex.GetType().Name}: {ex.Message}");
                     return;
                 }
 
                 if (stageCapture != null)
                 {
-                    Console.SetOut(originalOut);
+                    SessionIO.Enter(originalIn, originalOut, _isRemote);
                     previousOutput = stageCapture.ToString();
                 }
                 else
@@ -153,8 +167,7 @@ public sealed class NixShell
         }
         finally
         {
-            Console.SetOut(originalOut);
-            Console.SetIn(originalIn);
+            SessionIO.Enter(originalIn, originalOut, _isRemote);
             IsPiped = false;
         }
     }
@@ -231,12 +244,12 @@ public sealed class NixShell
         }
 
         // Capture output if redirecting
-        TextWriter originalOut = Console.Out;
+        TextWriter originalOut = Out;
         StringWriter? capture = null;
         if (redirectFile != null)
         {
             capture = new StringWriter();
-            Console.SetOut(capture);
+            SessionIO.Enter(In, capture, _isRemote);
         }
 
         try
@@ -262,7 +275,12 @@ public sealed class NixShell
                 case "source":
                 case ".": CmdSource(args); break;
                 case "daemon": CmdDaemon(args); break;
-                case "clear": Console.Clear(); break;
+                case "clear":
+                    if (!_isRemote)
+                        Console.Clear();
+                    else
+                        Out.Write("\x1b[2J\x1b[H\x1b[3J"); // ANSI clear screen + scrollback
+                    break;
                 case "exit":
                 case "logout":
                     _running = false;
@@ -271,21 +289,21 @@ public sealed class NixShell
                     if (!_scriptRunner.TryRunCommand(cmd, args, _currentUser, _cwd))
                     {
                         if (!TryRunShellScript(cmd, args))
-                            Console.WriteLine($"nsh: {cmd}: command not found");
+                            Out.WriteLine($"nsh: {cmd}: command not found");
                     }
                     break;
             }
         }
         catch (Exception ex)
         {
-            // Restore console state before printing
+            // Restore session state before printing
             if (capture != null)
             {
-                Console.SetOut(originalOut);
+                SessionIO.Enter(In, originalOut, _isRemote);
                 capture = null;
             }
-            Console.ResetColor();
-            Console.Error.WriteLine($"nsh: {cmd}: {ex.GetType().Name}: {ex.Message}");
+            try { Console.ResetColor(); } catch { }
+            Out.WriteLine($"nsh: {cmd}: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -293,7 +311,7 @@ public sealed class NixShell
             {
                 if (capture != null)
                 {
-                    Console.SetOut(originalOut);
+                    SessionIO.Enter(In, originalOut, _isRemote);
                     string output = capture.ToString();
                     string fullPath = VirtualFileSystem.ResolvePath(_cwd, redirectFile!);
 
@@ -304,7 +322,7 @@ public sealed class NixShell
                     var node = _fs.GetNode(fullPath);
                     if (node != null && !node.CanWrite(_currentUser.Uid, _currentUser.Gid))
                     {
-                        Console.WriteLine($"nsh: {redirectFile}: Permission denied");
+                        Out.WriteLine($"nsh: {redirectFile}: Permission denied");
                         allowed = false;
                     }
                 }
@@ -314,7 +332,7 @@ public sealed class NixShell
                     var parentNode = _fs.GetNode(parent);
                     if (parentNode != null && !parentNode.CanWrite(_currentUser.Uid, _currentUser.Gid))
                     {
-                        Console.WriteLine($"nsh: {redirectFile}: Permission denied");
+                        Out.WriteLine($"nsh: {redirectFile}: Permission denied");
                         allowed = false;
                     }
                 }
@@ -339,9 +357,9 @@ public sealed class NixShell
             }
             catch (Exception ex)
             {
-                Console.SetOut(originalOut);
-                Console.ResetColor();
-                Console.Error.WriteLine($"nsh: redirect error: {ex.GetType().Name}: {ex.Message}");
+                SessionIO.Enter(In, originalOut, _isRemote);
+                try { Console.ResetColor(); } catch { }
+                Out.WriteLine($"nsh: redirect error: {ex.GetType().Name}: {ex.Message}");
             }
         }
     }
@@ -350,7 +368,7 @@ public sealed class NixShell
 
     private void CmdHelp()
     {
-        Console.WriteLine("""
+        Out.WriteLine("""
         NetNIX Shell (nsh) — Available commands:
 
           Use 'man <command>' for detailed help on any command.
@@ -373,7 +391,7 @@ public sealed class NixShell
             useradd  userdel  usermod
             groupadd  groupdel  groupmod
             mount  umount  export  importfile  reinstall
-            npak  npak-demo  httpd
+            npak  npak-demo  httpd  telnetd
 
           Help topics:
             man api                  NixApi scripting reference
@@ -390,6 +408,7 @@ public sealed class NixShell
             man daemon               Daemon management commands
             man daemon-writing       How to write daemon scripts
             man httpd                Built-in HTTP server daemon
+            man telnetd              Telnet server for remote access
 
           Additional packages (install via npak):
             npak get install kobold      AI chat client for KoboldCpp
@@ -408,7 +427,7 @@ public sealed class NixShell
 
     private void CmdRun(List<string> args)
     {
-        if (args.Count == 0) { Console.WriteLine("run: usage: run <file.cs> [args...]"); return; }
+        if (args.Count == 0) { Out.WriteLine("run: usage: run <file.cs> [args...]"); return; }
 
         string path = VirtualFileSystem.ResolvePath(_cwd, args[0]);
         var scriptArgs = args.Skip(1).ToArray();
@@ -423,9 +442,9 @@ public sealed class NixShell
 
         if (args.Count == 0)
         {
-            Console.WriteLine("Usage: man <topic>");
-            Console.WriteLine("       man -k <keyword>   Search pages");
-            Console.WriteLine("       man --list          List all pages");
+            Out.WriteLine("Usage: man <topic>");
+            Out.WriteLine("       man -k <keyword>   Search pages");
+            Out.WriteLine("       man --list          List all pages");
             return;
         }
 
@@ -434,26 +453,26 @@ public sealed class NixShell
         {
             if (!_fs.IsDirectory(manDir))
             {
-                Console.WriteLine("man: no manual pages installed");
+                Out.WriteLine("man: no manual pages installed");
                 return;
             }
             var pages = _fs.ListDirectory(manDir).OrderBy(n => n.Name).ToList();
             if (pages.Count == 0)
             {
-                Console.WriteLine("man: no manual pages installed");
+                Out.WriteLine("man: no manual pages installed");
                 return;
             }
-            Console.WriteLine("Available manual pages:\n");
+            Out.WriteLine("Available manual pages:\n");
             int col = 0;
             foreach (var page in pages)
             {
                 string name = page.Name.EndsWith(".txt") ? page.Name[..^4] : page.Name;
-                Console.Write($"  {name,-18}");
+                Out.Write($"  {name,-18}");
                 col++;
-                if (col % 4 == 0) Console.WriteLine();
+                if (col % 4 == 0) Out.WriteLine();
             }
-            if (col % 4 != 0) Console.WriteLine();
-            Console.WriteLine($"\n{pages.Count} pages available. Use 'man <topic>' to read.");
+            if (col % 4 != 0) Out.WriteLine();
+            Out.WriteLine($"\n{pages.Count} pages available. Use 'man <topic>' to read.");
             return;
         }
 
@@ -461,7 +480,7 @@ public sealed class NixShell
         if (args[0] == "-k" && args.Count > 1)
         {
             string keyword = args[1];
-            if (!_fs.IsDirectory(manDir)) { Console.WriteLine("man: no manual pages installed"); return; }
+            if (!_fs.IsDirectory(manDir)) { Out.WriteLine("man: no manual pages installed"); return; }
 
             var pages = _fs.ListDirectory(manDir).OrderBy(n => n.Name).ToList();
             bool found = false;
@@ -473,12 +492,12 @@ public sealed class NixShell
                     string name = page.Name.EndsWith(".txt") ? page.Name[..^4] : page.Name;
                     // Extract the NAME line for a brief description
                     string desc = ExtractManDescription(content);
-                    Console.WriteLine($"  {name,-18} {desc}");
+                    Out.WriteLine($"  {name,-18} {desc}");
                     found = true;
                 }
             }
             if (!found)
-                Console.WriteLine($"man: nothing found for '{keyword}'");
+                Out.WriteLine($"man: nothing found for '{keyword}'");
             return;
         }
 
@@ -488,9 +507,9 @@ public sealed class NixShell
 
         if (!_fs.IsFile(filePath))
         {
-            Console.WriteLine($"man: no manual entry for '{topic}'");
-            Console.WriteLine($"     Use 'man --list' to see available pages.");
-            Console.WriteLine($"     Create one with: edit {filePath}");
+            Out.WriteLine($"man: no manual entry for '{topic}'");
+            Out.WriteLine($"     Use 'man --list' to see available pages.");
+            Out.WriteLine($"     Create one with: edit {filePath}");
             return;
         }
 
@@ -519,18 +538,27 @@ public sealed class NixShell
     private static void PageOutput(string text)
     {
         var lines = text.Split('\n');
-        int pageSize = Console.WindowHeight - 2;
+
+        if (SessionIO.IsRemote)
+        {
+            // Remote sessions: just dump everything (no paging)
+            foreach (var line in lines)
+                SessionIO.Out.WriteLine(line);
+            return;
+        }
+
+        int pageSize = SessionIO.WindowHeight - 2;
         if (pageSize < 5) pageSize = 20;
 
         for (int i = 0; i < lines.Length; i++)
         {
-            Console.WriteLine(lines[i]);
+            SessionIO.Out.WriteLine(lines[i]);
 
             if ((i + 1) % pageSize == 0 && i + 1 < lines.Length)
             {
-                Console.Write("\x1b[7m -- Press any key for more, q to quit -- \x1b[0m");
+                SessionIO.Out.Write("\x1b[7m -- Press any key for more, q to quit -- \x1b[0m");
                 var key = Console.ReadKey(intercept: true);
-                Console.Write("\r\x1b[K"); // clear the prompt line
+                SessionIO.Out.Write("\r\x1b[K"); // clear the prompt line
                 if (key.KeyChar == 'q' || key.KeyChar == 'Q')
                     return;
             }
@@ -549,14 +577,14 @@ public sealed class NixShell
 
         if (!_fs.IsDirectory(target))
         {
-            Console.WriteLine($"cd: {args.FirstOrDefault() ?? "~"}: No such directory");
+            Out.WriteLine($"cd: {args.FirstOrDefault() ?? "~"}: No such directory");
             return;
         }
 
         var node = _fs.GetNode(target);
         if (node != null && !node.CanExecute(_currentUser.Uid, _currentUser.Gid))
         {
-            Console.WriteLine($"cd: {args.FirstOrDefault() ?? "~"}: Permission denied");
+            Out.WriteLine($"cd: {args.FirstOrDefault() ?? "~"}: Permission denied");
             return;
         }
 
@@ -565,7 +593,7 @@ public sealed class NixShell
 
     private void CmdWrite(List<string> args)
     {
-        if (args.Count == 0) { Console.WriteLine("write: usage: write <file>"); return; }
+        if (args.Count == 0) { Out.WriteLine("write: usage: write <file>"); return; }
 
         string path = VirtualFileSystem.ResolvePath(_cwd, args[0]);
 
@@ -575,7 +603,7 @@ public sealed class NixShell
             var node = _fs.GetNode(path);
             if (node != null && !node.CanWrite(_currentUser.Uid, _currentUser.Gid))
             {
-                Console.WriteLine($"write: {args[0]}: Permission denied");
+                Out.WriteLine($"write: {args[0]}: Permission denied");
                 return;
             }
         }
@@ -585,17 +613,17 @@ public sealed class NixShell
             var parentNode = _fs.GetNode(parent);
             if (parentNode != null && !parentNode.CanWrite(_currentUser.Uid, _currentUser.Gid))
             {
-                Console.WriteLine($"write: {args[0]}: Permission denied");
+                Out.WriteLine($"write: {args[0]}: Permission denied");
                 return;
             }
         }
 
-        Console.WriteLine("Enter text (type a single '.' on a line to finish):");
+        Out.WriteLine("Enter text (type a single '.' on a line to finish):");
 
         var sb = new StringBuilder();
         while (true)
         {
-            string? line = Console.ReadLine();
+            string? line = In.ReadLine();
             if (line == null || line == ".") break;
             sb.AppendLine(line);
         }
@@ -611,16 +639,16 @@ public sealed class NixShell
 
     private void CmdChmod(List<string> args)
     {
-        if (args.Count < 2) { Console.WriteLine("chmod: usage: chmod <perms> <path>"); return; }
+        if (args.Count < 2) { Out.WriteLine("chmod: usage: chmod <perms> <path>"); return; }
 
         string perms = args[0];
         string path = VirtualFileSystem.ResolvePath(_cwd, args[1]);
         var node = _fs.GetNode(path);
-        if (node == null) { Console.WriteLine($"chmod: {args[1]}: No such file or directory"); return; }
+        if (node == null) { Out.WriteLine($"chmod: {args[1]}: No such file or directory"); return; }
 
         if (_currentUser.Uid != 0 && node.OwnerId != _currentUser.Uid)
         {
-            Console.WriteLine("chmod: Permission denied");
+            Out.WriteLine("chmod: Permission denied");
             return;
         }
 
@@ -634,7 +662,7 @@ public sealed class NixShell
         }
         else
         {
-            Console.WriteLine("chmod: invalid mode — use rwxr-xr-x or 755 format");
+            Out.WriteLine("chmod: invalid mode — use rwxr-xr-x or 755 format");
             return;
         }
 
@@ -643,15 +671,15 @@ public sealed class NixShell
 
     private void CmdChown(List<string> args)
     {
-        if (args.Count < 2) { Console.WriteLine("chown: usage: chown <user> <path>"); return; }
-        if (_currentUser.Uid != 0) { Console.WriteLine("chown: Permission denied (must be root)"); return; }
+        if (args.Count < 2) { Out.WriteLine("chown: usage: chown <user> <path>"); return; }
+        if (_currentUser.Uid != 0) { Out.WriteLine("chown: Permission denied (must be root)"); return; }
 
         string path = VirtualFileSystem.ResolvePath(_cwd, args[1]);
         var node = _fs.GetNode(path);
-        if (node == null) { Console.WriteLine($"chown: {args[1]}: No such file or directory"); return; }
+        if (node == null) { Out.WriteLine($"chown: {args[1]}: No such file or directory"); return; }
 
         var user = _userMgr.GetUser(args[0]);
-        if (user == null) { Console.WriteLine($"chown: unknown user '{args[0]}'"); return; }
+        if (user == null) { Out.WriteLine($"chown: unknown user '{args[0]}'"); return; }
 
         node.OwnerId = user.Uid;
         node.GroupId = user.Gid;
@@ -660,27 +688,27 @@ public sealed class NixShell
 
     private void CmdAddUser(List<string> args)
     {
-        if (_currentUser.Uid != 0) { Console.WriteLine("adduser: Permission denied (must be root)"); return; }
-        if (args.Count == 0) { Console.WriteLine("adduser: usage: adduser <username>"); return; }
+        if (_currentUser.Uid != 0) { Out.WriteLine("adduser: Permission denied (must be root)"); return; }
+        if (args.Count == 0) { Out.WriteLine("adduser: usage: adduser <username>"); return; }
 
         string username = args[0];
-        Console.Write($"New password for {username}: ");
+        Out.Write($"New password for {username}: ");
         string? pass = ReadPassword();
-        if (string.IsNullOrEmpty(pass)) { Console.WriteLine("adduser: aborted"); return; }
+        if (string.IsNullOrEmpty(pass)) { Out.WriteLine("adduser: aborted"); return; }
 
         _userMgr.CreateUser(username, pass);
         _fs.Save();
-        Console.WriteLine($"User '{username}' created.");
+        Out.WriteLine($"User '{username}' created.");
     }
 
     private void CmdDelUser(List<string> args)
     {
-        if (_currentUser.Uid != 0) { Console.WriteLine("deluser: Permission denied (must be root)"); return; }
-        if (args.Count == 0) { Console.WriteLine("deluser: usage: deluser <username>"); return; }
+        if (_currentUser.Uid != 0) { Out.WriteLine("deluser: Permission denied (must be root)"); return; }
+        if (args.Count == 0) { Out.WriteLine("deluser: usage: deluser <username>"); return; }
 
         _userMgr.DeleteUser(args[0]);
         _fs.Save();
-        Console.WriteLine($"User '{args[0]}' deleted.");
+        Out.WriteLine($"User '{args[0]}' deleted.");
     }
 
     private void CmdPasswd(List<string> args)
@@ -689,33 +717,33 @@ public sealed class NixShell
 
         if (target != _currentUser.Username && _currentUser.Uid != 0)
         {
-            Console.WriteLine("passwd: Permission denied");
+            Out.WriteLine("passwd: Permission denied");
             return;
         }
 
-        Console.Write($"New password for {target}: ");
+        Out.Write($"New password for {target}: ");
         string? pass = ReadPassword();
-        if (string.IsNullOrEmpty(pass)) { Console.WriteLine("passwd: aborted"); return; }
+        if (string.IsNullOrEmpty(pass)) { Out.WriteLine("passwd: aborted"); return; }
 
         _userMgr.ChangePassword(target, pass);
         _fs.Save();
-        Console.WriteLine("Password updated.");
+        Out.WriteLine("Password updated.");
     }
 
     private void CmdSu(List<string> args)
     {
-        if (args.Count == 0) { Console.WriteLine("su: usage: su <username>"); return; }
+        if (args.Count == 0) { Out.WriteLine("su: usage: su <username>"); return; }
 
         var target = _userMgr.GetUser(args[0]);
-        if (target == null) { Console.WriteLine($"su: user '{args[0]}' does not exist"); return; }
+        if (target == null) { Out.WriteLine($"su: user '{args[0]}' does not exist"); return; }
 
         if (_currentUser.Uid != 0)
         {
-            Console.Write($"Password for {target.Username}: ");
+            Out.Write($"Password for {target.Username}: ");
             string? pass = ReadPassword();
             if (pass == null || !target.VerifyPassword(pass))
             {
-                Console.WriteLine("su: Authentication failure");
+                Out.WriteLine("su: Authentication failure");
                 return;
             }
         }
@@ -723,14 +751,14 @@ public sealed class NixShell
         _currentUser = target;
         _cwd = target.HomeDirectory;
         if (!_fs.Exists(_cwd)) _cwd = "/";
-        Console.WriteLine($"Switched to {target.Username}");
+        Out.WriteLine($"Switched to {target.Username}");
     }
 
     private void CmdSudo(List<string> args)
     {
         if (args.Count == 0)
         {
-            Console.WriteLine("sudo: usage: sudo <command> [args...]");
+            Out.WriteLine("sudo: usage: sudo <command> [args...]");
             return;
         }
 
@@ -745,16 +773,16 @@ public sealed class NixShell
         var sudoGroup = _userMgr.GetGroup("sudo");
         if (sudoGroup == null || !sudoGroup.Members.Contains(_currentUser.Username))
         {
-            Console.WriteLine($"sudo: {_currentUser.Username} is not in the sudo group");
+            Out.WriteLine($"sudo: {_currentUser.Username} is not in the sudo group");
             return;
         }
 
         // Prompt for the user's own password
-        Console.Write($"[sudo] password for {_currentUser.Username}: ");
+        Out.Write($"[sudo] password for {_currentUser.Username}: ");
         string? pass = ReadPassword();
         if (pass == null || !_currentUser.VerifyPassword(pass))
         {
-            Console.WriteLine("sudo: authentication failure");
+            Out.WriteLine("sudo: authentication failure");
             return;
         }
 
@@ -762,7 +790,7 @@ public sealed class NixShell
         var rootUser = _userMgr.GetUser(0);
         if (rootUser == null)
         {
-            Console.WriteLine("sudo: root account not found");
+            Out.WriteLine("sudo: root account not found");
             return;
         }
 
@@ -786,33 +814,33 @@ public sealed class NixShell
         foreach (var u in _userMgr.Users)
         {
             var grp = _userMgr.GetGroup(u.Gid);
-            Console.WriteLine($"  {u.Username,-16} uid={u.Uid}  gid={u.Gid}({grp?.Name ?? "?"})  home={u.HomeDirectory}");
+            Out.WriteLine($"  {u.Username,-16} uid={u.Uid}  gid={u.Gid}({grp?.Name ?? "?"})  home={u.HomeDirectory}");
         }
     }
 
     private void CmdGroups()
     {
         foreach (var g in _userMgr.Groups)
-            Console.WriteLine($"  {g.Name,-16} gid={g.Gid}  members={string.Join(',', g.Members)}");
+            Out.WriteLine($"  {g.Name,-16} gid={g.Gid}  members={string.Join(',', g.Members)}");
     }
 
     private void CmdStat(List<string> args)
     {
-        if (args.Count == 0) { Console.WriteLine("stat: missing operand"); return; }
+        if (args.Count == 0) { Out.WriteLine("stat: missing operand"); return; }
 
         string path = VirtualFileSystem.ResolvePath(_cwd, args[0]);
         var node = _fs.GetNode(path);
-        if (node == null) { Console.WriteLine($"stat: {args[0]}: No such file or directory"); return; }
+        if (node == null) { Out.WriteLine($"stat: {args[0]}: No such file or directory"); return; }
 
         var owner = _userMgr.GetUser(node.OwnerId);
         var group = _userMgr.GetGroup(node.GroupId);
 
-        Console.WriteLine($"  File: {node.Path}");
-        Console.WriteLine($"  Type: {(node.IsDirectory ? "directory" : "regular file")}");
-        Console.WriteLine($"  Size: {(node.IsDirectory ? "-" : (node.Data?.Length ?? 0).ToString())} bytes");
-        Console.WriteLine($"  Mode: {node.PermissionString()}");
-        Console.WriteLine($"  Owner: {owner?.Username ?? node.OwnerId.ToString()} (uid={node.OwnerId})");
-        Console.WriteLine($"  Group: {group?.Name ?? node.GroupId.ToString()} (gid={node.GroupId})");
+        Out.WriteLine($"  File: {node.Path}");
+        Out.WriteLine($"  Type: {(node.IsDirectory ? "directory" : "regular file")}");
+        Out.WriteLine($"  Size: {(node.IsDirectory ? "-" : (node.Data?.Length ?? 0).ToString())} bytes");
+        Out.WriteLine($"  Mode: {node.PermissionString()}");
+        Out.WriteLine($"  Owner: {owner?.Username ?? node.OwnerId.ToString()} (uid={node.OwnerId})");
+        Out.WriteLine($"  Group: {group?.Name ?? node.GroupId.ToString()} (gid={node.GroupId})");
     }
 
     private void CmdTree(List<string> args)
@@ -820,11 +848,11 @@ public sealed class NixShell
         string root = args.Count > 0 ? VirtualFileSystem.ResolvePath(_cwd, args[0]) : _cwd;
         if (!_fs.IsDirectory(root))
         {
-            Console.WriteLine($"tree: {args.FirstOrDefault() ?? "."}: Not a directory");
+            Out.WriteLine($"tree: {args.FirstOrDefault() ?? "."}: Not a directory");
             return;
         }
 
-        Console.WriteLine(root == "/" ? "/" : VirtualFileSystem.GetName(root));
+        Out.WriteLine(root == "/" ? "/" : VirtualFileSystem.GetName(root));
         PrintTree(root, "");
     }
 
@@ -840,12 +868,12 @@ public sealed class NixShell
             var child = children[i];
             if (child.IsDirectory)
             {
-                Console.WriteLine($"{indent}{connector}\u001b[34m{child.Name}/\u001b[0m");
+                Out.WriteLine($"{indent}{connector}\u001b[34m{child.Name}/\u001b[0m");
                 PrintTree(child.Path, indent + childIndent);
             }
             else
             {
-                Console.WriteLine($"{indent}{connector}{child.Name}");
+                Out.WriteLine($"{indent}{connector}{child.Name}");
             }
         }
     }
@@ -906,9 +934,17 @@ public sealed class NixShell
 
     private static string? ReadPassword()
     {
-        if (Console.IsInputRedirected)
+        if (Console.IsInputRedirected || SessionIO.IsRemote)
         {
-            return Console.ReadLine();
+            SessionIO.SetPasswordMode(true);
+            try
+            {
+                return SessionIO.In.ReadLine();
+            }
+            finally
+            {
+                SessionIO.SetPasswordMode(false);
+            }
         }
 
         var sb = new StringBuilder();
@@ -917,7 +953,7 @@ public sealed class NixShell
             var key = Console.ReadKey(intercept: true);
             if (key.Key == ConsoleKey.Enter)
             {
-                Console.WriteLine();
+                SessionIO.Out.WriteLine();
                 break;
             }
 
@@ -926,13 +962,13 @@ public sealed class NixShell
                 if (sb.Length > 0)
                 {
                     sb.Remove(sb.Length - 1, 1);
-                    Console.Write("\b \b");
+                    SessionIO.Out.Write("\b \b");
                 }
             }
             else
             {
                 sb.Append(key.KeyChar);
-                Console.Write('*');
+                SessionIO.Out.Write('*');
             }
         }
 
@@ -959,7 +995,7 @@ public sealed class NixShell
 
         if (!node.CanRead(_currentUser.Uid, _currentUser.Gid))
         {
-            Console.WriteLine($"nsh: {command}: Permission denied");
+            Out.WriteLine($"nsh: {command}: Permission denied");
             return true;
         }
 
@@ -1034,7 +1070,7 @@ public sealed class NixShell
     {
         if (args.Count == 0)
         {
-            Console.WriteLine("source: usage: source <file>");
+            Out.WriteLine("source: usage: source <file>");
             return;
         }
 
@@ -1042,14 +1078,14 @@ public sealed class NixShell
 
         if (!_fs.IsFile(path))
         {
-            Console.WriteLine($"source: {args[0]}: No such file");
+            Out.WriteLine($"source: {args[0]}: No such file");
             return;
         }
 
         var node = _fs.GetNode(path);
         if (node != null && !node.CanRead(_currentUser.Uid, _currentUser.Gid))
         {
-            Console.WriteLine($"source: {args[0]}: Permission denied");
+            Out.WriteLine($"source: {args[0]}: Permission denied");
             return;
         }
 
@@ -1162,7 +1198,7 @@ public sealed class NixShell
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"nsh: {label}: {ex.Message}");
+                Out.WriteLine($"nsh: {label}: {ex.Message}");
                 vars["?"] = "1";
             }
 
@@ -1496,8 +1532,8 @@ public sealed class NixShell
         // Run command, check exit code
         try
         {
-            var origOut = Console.Out;
-            Console.SetOut(new StringWriter()); // suppress output
+            var origOut = Out;
+            SessionIO.Enter(In, new StringWriter(), _isRemote); // suppress output
             try
             {
                 ExecuteLine(condition);
@@ -1511,7 +1547,7 @@ public sealed class NixShell
             }
             finally
             {
-                Console.SetOut(origOut);
+                SessionIO.Enter(In, origOut, _isRemote);
             }
         }
         catch
@@ -1776,9 +1812,9 @@ public sealed class NixShell
                 cmd = ExpandScriptVars(cmd, vars);
 
                 // Capture command output
-                var origOut = Console.Out;
+                var origOut = Out;
                 var capture = new StringWriter();
-                Console.SetOut(capture);
+                SessionIO.Enter(In, capture, _isRemote);
                 try
                 {
                     ExecuteLine(cmd);
@@ -1790,7 +1826,7 @@ public sealed class NixShell
                 }
                 finally
                 {
-                    Console.SetOut(origOut);
+                    SessionIO.Enter(In, origOut, _isRemote);
                 }
 
                 string result = capture.ToString().TrimEnd('\n', '\r');
@@ -1808,12 +1844,12 @@ public sealed class NixShell
                     string cmd = line.Substring(i + 1, closeIdx - i - 1);
                     cmd = ExpandScriptVars(cmd, vars);
 
-                    var origOut = Console.Out;
+                    var origOut = Out;
                     var capture = new StringWriter();
-                    Console.SetOut(capture);
+                    SessionIO.Enter(In, capture, _isRemote);
                     try { ExecuteLine(cmd); vars["?"] = "0"; }
                     catch { vars["?"] = "1"; }
-                    finally { Console.SetOut(origOut); }
+                    finally { SessionIO.Enter(In, origOut, _isRemote); }
 
                     sb.Append(capture.ToString().TrimEnd('\n', '\r'));
                     i = closeIdx + 1;
@@ -1983,7 +2019,7 @@ public sealed class NixShell
                 PrintDaemonUsage();
                 break;
             default:
-                Console.WriteLine($"daemon: unknown subcommand '{sub}'");
+                Out.WriteLine($"daemon: unknown subcommand '{sub}'");
                 PrintDaemonUsage();
                 break;
         }
@@ -1993,14 +2029,14 @@ public sealed class NixShell
     {
         if (_currentUser.Uid != 0)
         {
-            Console.WriteLine("daemon: permission denied (must be root)");
+            Out.WriteLine("daemon: permission denied (must be root)");
             return;
         }
 
         if (subArgs.Count == 0)
         {
-            Console.WriteLine("daemon: start requires a script path");
-            Console.WriteLine("Usage: daemon start <script.cs> [args...]");
+            Out.WriteLine("daemon: start requires a script path");
+            Out.WriteLine("Usage: daemon start <script.cs> [args...]");
             return;
         }
 
@@ -2029,7 +2065,7 @@ public sealed class NixShell
         int pid = _daemonMgr.Start(name, vfsPath, extraArgs, _currentUser, _cwd);
         if (pid >= 0)
         {
-            Console.WriteLine($"daemon: started '{name}' (pid {pid})");
+            Out.WriteLine($"daemon: started '{name}' (pid {pid})");
         }
     }
 
@@ -2037,20 +2073,20 @@ public sealed class NixShell
     {
         if (_currentUser.Uid != 0)
         {
-            Console.WriteLine("daemon: permission denied (must be root)");
+            Out.WriteLine("daemon: permission denied (must be root)");
             return;
         }
 
         if (subArgs.Count == 0)
         {
-            Console.WriteLine("daemon: stop requires a name or PID");
-            Console.WriteLine("Usage: daemon stop <name|pid>");
+            Out.WriteLine("daemon: stop requires a name or PID");
+            Out.WriteLine("Usage: daemon stop <name|pid>");
             return;
         }
 
         if (_daemonMgr.Stop(subArgs[0], _currentUser.Uid))
         {
-            Console.WriteLine($"daemon: '{subArgs[0]}' stopped");
+            Out.WriteLine($"daemon: '{subArgs[0]}' stopped");
         }
     }
 
@@ -2059,14 +2095,14 @@ public sealed class NixShell
         var daemons = _daemonMgr.List();
         if (daemons.Length == 0)
         {
-            Console.WriteLine("No daemons running.");
+            Out.WriteLine("No daemons running.");
             return;
         }
 
-        Console.WriteLine($"{"PID",-8} {"NAME",-16} {"STATUS",-10} {"OWNER",-10} {"STARTED"}");
+        Out.WriteLine($"{"PID",-8} {"NAME",-16} {"STATUS",-10} {"OWNER",-10} {"STARTED"}");
         foreach (var d in daemons)
         {
-            Console.WriteLine($"{d.Pid,-8} {d.Name,-16} {d.Status,-10} {d.Owner,-10} {d.StartedAt:HH:mm:ss}");
+            Out.WriteLine($"{d.Pid,-8} {d.Name,-16} {d.Status,-10} {d.Owner,-10} {d.StartedAt:HH:mm:ss}");
         }
     }
 
@@ -2081,33 +2117,33 @@ public sealed class NixShell
         var info = _daemonMgr.GetStatus(subArgs[0]);
         if (info == null)
         {
-            Console.WriteLine($"daemon: '{subArgs[0]}' not found");
+            Out.WriteLine($"daemon: '{subArgs[0]}' not found");
             return;
         }
 
-        Console.WriteLine($"Name:    {info.Name}");
-        Console.WriteLine($"PID:     {info.Pid}");
-        Console.WriteLine($"Status:  {info.Status}");
-        Console.WriteLine($"Script:  {info.ScriptPath}");
-        Console.WriteLine($"Owner:   {info.Owner}");
-        Console.WriteLine($"Started: {info.StartedAt:yyyy-MM-dd HH:mm:ss}");
+        Out.WriteLine($"Name:    {info.Name}");
+        Out.WriteLine($"PID:     {info.Pid}");
+        Out.WriteLine($"Status:  {info.Status}");
+        Out.WriteLine($"Script:  {info.ScriptPath}");
+        Out.WriteLine($"Owner:   {info.Owner}");
+        Out.WriteLine($"Started: {info.StartedAt:yyyy-MM-dd HH:mm:ss}");
         if (info.StoppedAt.HasValue)
-            Console.WriteLine($"Stopped: {info.StoppedAt.Value:yyyy-MM-dd HH:mm:ss}");
+            Out.WriteLine($"Stopped: {info.StoppedAt.Value:yyyy-MM-dd HH:mm:ss}");
     }
 
     private static void PrintDaemonUsage()
     {
-        Console.WriteLine("daemon — manage background daemon processes");
-        Console.WriteLine();
-        Console.WriteLine("Usage:");
-        Console.WriteLine("  daemon start <script.cs> [args...]   Start a daemon");
-        Console.WriteLine("  daemon stop <name|pid>               Stop a running daemon");
-        Console.WriteLine("  daemon list                          List all daemons");
-        Console.WriteLine("  daemon status <name|pid>             Show daemon details");
-        Console.WriteLine();
-        Console.WriteLine("Daemon scripts must implement:");
-        Console.WriteLine("  static int Daemon(NixApi api, string[] args)");
-        Console.WriteLine();
-        Console.WriteLine("Only root can start or stop daemons.");
+        SessionIO.Out.WriteLine("daemon — manage background daemon processes");
+        SessionIO.Out.WriteLine();
+        SessionIO.Out.WriteLine("Usage:");
+        SessionIO.Out.WriteLine("  daemon start <script.cs> [args...]   Start a daemon");
+        SessionIO.Out.WriteLine("  daemon stop <name|pid>               Stop a running daemon");
+        SessionIO.Out.WriteLine("  daemon list                          List all daemons");
+        SessionIO.Out.WriteLine("  daemon status <name|pid>             Show daemon details");
+        SessionIO.Out.WriteLine();
+        SessionIO.Out.WriteLine("Daemon scripts must implement:");
+        SessionIO.Out.WriteLine("  static int Daemon(NixApi api, string[] args)");
+        SessionIO.Out.WriteLine();
+        SessionIO.Out.WriteLine("Only root can start or stop daemons.");
     }
 }

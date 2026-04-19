@@ -36,6 +36,7 @@ public static class EditorCommand
     private static int _cursorRow;
     private static int _cursorCol;
     private static int _scrollOffset;
+    private static int _scrollX; // horizontal scroll offset
     private static bool _modified;
     private static bool _quit;
     private static string _statusMessage = "";
@@ -64,6 +65,7 @@ public static class EditorCommand
         _cursorRow = 0;
         _cursorCol = 0;
         _scrollOffset = 0;
+        _scrollX = 0;
         _modified = false;
         _quit = false;
         _statusMessage = "";
@@ -105,7 +107,7 @@ public static class EditorCommand
         // Load file
         LoadFile();
 
-        Console.CursorVisible = false;
+        try { Console.CursorVisible = false; } catch { }
         try
         {
             while (!_quit)
@@ -116,8 +118,8 @@ public static class EditorCommand
         }
         finally
         {
-            Console.CursorVisible = true;
-            Console.Clear();
+            try { Console.CursorVisible = true; } catch { }
+            try { Console.Write("\x1b[2J\x1b[H\x1b[3J"); } catch { } // ANSI clear screen + scrollback
         }
 
         return 0;
@@ -176,15 +178,23 @@ public static class EditorCommand
 
     private static void Render()
     {
-        _editorRows = Console.WindowHeight - 3; // 1 title + 1 status + 1 shortcut bar
-        _editorCols = Console.WindowWidth;
+        _editorRows = NetNIX.Shell.SessionIO.WindowHeight - 3; // 1 title + 1 status + 1 shortcut bar
+        _editorCols = NetNIX.Shell.SessionIO.WindowWidth;
         if (_editorRows < 1) _editorRows = 1;
 
-        // Ensure cursor is visible
+        // Ensure cursor is visible (vertical)
         if (_cursorRow < _scrollOffset)
             _scrollOffset = _cursorRow;
         if (_cursorRow >= _scrollOffset + _editorRows)
             _scrollOffset = _cursorRow - _editorRows + 1;
+
+        // Ensure cursor is visible (horizontal)
+        int textArea = _editorCols - GutterWidth;
+        if (textArea < 1) textArea = 1;
+        if (_cursorCol < _scrollX)
+            _scrollX = _cursorCol;
+        if (_cursorCol >= _scrollX + textArea)
+            _scrollX = _cursorCol - textArea + 1;
 
         var buf = new StringBuilder();
 
@@ -219,16 +229,15 @@ public static class EditorCommand
                 while (num.Length < 4) num = " " + num;
                 buf.Append("\x1b[90m"); // dim
                 buf.Append(num);
-                buf.Append(" | ");
+                buf.Append(_scrollX > 0 ? "<| " : " | ");
                 buf.Append("\x1b[0m");
 
-                int maxText = _editorCols - GutterWidth;
-                if (maxText > 0)
+                if (textArea > 0 && lineText.Length > _scrollX)
                 {
-                    if (lineText.Length > maxText)
-                        buf.Append(lineText.Substring(0, maxText));
-                    else
-                        buf.Append(lineText);
+                    string visible = lineText.Substring(_scrollX);
+                    if (visible.Length > textArea)
+                        visible = visible.Substring(0, textArea);
+                    buf.Append(visible);
                 }
             }
             else
@@ -264,7 +273,7 @@ public static class EditorCommand
 
         // ?? Position cursor ???????????????????????????????????????
         int screenRow = _cursorRow - _scrollOffset + 2; // +1 title, +1 one-based
-        int screenCol = _cursorCol + GutterWidth + 1;
+        int screenCol = _cursorCol - _scrollX + GutterWidth + 1;
         buf.Append("\x1b[" + screenRow + ";" + screenCol + "H");
         buf.Append("\x1b[?25h"); // show cursor
 
@@ -275,9 +284,7 @@ public static class EditorCommand
 
     private static void ProcessKey()
     {
-        var key = Console.ReadKey(true);
-
-        // Function key shortcuts
+        var key = NetNIX.Shell.SessionIO.ReadKey(true);
         if (key.Key == ConsoleKey.F2) { SaveFile(); return; }
         if (key.Key == ConsoleKey.F10) { HandleQuit(); return; }
 
@@ -581,26 +588,26 @@ public static class EditorCommand
     private static string Prompt(string message)
     {
         // Draw prompt on the status line
-        int promptRow = Console.WindowHeight - 2;
-        Console.SetCursorPosition(0, promptRow);
+        int promptRow = NetNIX.Shell.SessionIO.WindowHeight - 2;
+        Console.Write("\x1b[" + (promptRow + 1) + ";1H"); // move to prompt row
         Console.Write("\x1b[K"); // clear line
         Console.Write("\x1b[33m" + message + "\x1b[0m");
-        Console.CursorVisible = true;
+        try { Console.CursorVisible = true; } catch { }
 
         var sb = new StringBuilder();
         while (true)
         {
-            var key = Console.ReadKey(true);
+            var key = NetNIX.Shell.SessionIO.ReadKey(true);
 
             if (key.Key == ConsoleKey.Escape)
             {
-                Console.CursorVisible = false;
+                try { Console.CursorVisible = false; } catch { }
                 return null;
             }
 
             if (key.Key == ConsoleKey.Enter)
             {
-                Console.CursorVisible = false;
+                try { Console.CursorVisible = false; } catch { }
                 return sb.ToString();
             }
 

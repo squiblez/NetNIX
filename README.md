@@ -101,6 +101,84 @@ Everything lives in a single portable zip archive on your host OS. No admin righ
 
 ## What's New
 
+### Telnet Remote Access (telnetd)
+Full multi-user remote access via the Telnet protocol. Multiple users can connect simultaneously from any Telnet client (PuTTY, Linux `telnet`, Windows `telnet`, Tera Term, etc.) and get a complete shell session with all commands, the text editor, and scripting — all sharing the same virtual filesystem.
+
+```
+root# daemon start telnetd
+telnetd: listening on port 2323 (term 80x24, max 8 sessions)
+
+# From another machine:
+telnet yourhost 2323
+```
+
+Features:
+- Full nsh shell over Telnet with ANSI terminal support
+- Multiple simultaneous sessions, each on its own thread
+- Login authentication using NetNIX user accounts
+- Automatic terminal size detection via NAWS protocol negotiation
+- Configurable session limits, idle timeout, and login attempts
+- Customisable login banner and welcome message
+- Graceful disconnect handling — remote sessions can never crash the host
+- Cross-platform: works on Windows, Linux, and macOS
+
+### Daemon Configuration Files
+Both `telnetd` and `httpd` now read configuration from files in `/etc/`:
+
+- **`/etc/telnetd.conf`** — port, terminal dimensions, session limits, idle timeout, banners, logging
+- **`/etc/httpd.conf`** — port, web root, default page, logging
+
+Config files are plain text (`key = value` format), installed automatically from the `Factory/etc/` directory, and editable in the IDE or via `edit` inside NetNIX. Admin customisations are preserved across updates — factory setup never overwrites existing `.conf` files.
+
+```
+# Example /etc/telnetd.conf
+port = 2323
+terminal_width = 120
+terminal_height = 40
+max_sessions = 16
+idle_timeout = 60
+login_banner = My Server
+log_sessions = true
+host_log_events = true
+```
+
+### Dual Logging System
+Both `telnetd` and `httpd` support logging to two destinations:
+
+| Setting | Destination | Audience |
+|---------|-------------|----------|
+| `log_events` | `/var/log/<daemon>.log` (VFS) | Root users inside NetNIX |
+| `log_sessions` | `/var/log/telnetd/<user>.log` (VFS) | Root users inside NetNIX |
+| `host_log_events` | `logs/<daemon>.log` (host filesystem) | Host machine operator |
+| `host_log_sessions` | `logs/telnetd-<user>.log` (host filesystem) | Host machine operator |
+
+VFS logs are restricted to root (`rw-------`). Host logs are written to a `logs/` directory next to the executable via the new `api.HostLog()` API.
+
+### Cross-Platform Support
+The telnetd daemon and all networking code use standard cross-platform .NET APIs. NetNIX runs on:
+- **Windows** (Windows 10/11, Server 2016+)
+- **Linux** (any distro with .NET 8 runtime)
+- **macOS** (with .NET 8 runtime)
+
+### Editor Improvements
+- **Horizontal scrolling** — lines longer than the terminal width now scroll automatically. The gutter shows `<|` when scrolled right.
+- **Remote session support** — the editor uses `SessionIO.WindowWidth`/`WindowHeight` for correct sizing over Telnet, with automatic NAWS-based terminal size detection.
+- **Clean disconnect handling** — if a remote client disconnects mid-edit, the editor exits gracefully without crashing the host.
+
+### Session I/O Safety
+`SessionIO` now wraps all remote I/O with exception-safe wrappers:
+- **`SafeRemoteWriter`** — silently swallows write exceptions on disconnect
+- **`SafeRemoteReader`** — returns `null`/EOF on disconnect instead of throwing
+- **`ReadKey`** — returns Escape on disconnect instead of throwing
+- No exception from any remote session can ever propagate to crash the host process
+
+### New NixApi Methods
+| Method | Description |
+|--------|-------------|
+| `api.Chmod(path, permissions)` | Change file/directory permissions (owner or root only) |
+| `api.HostLog(category, message)` | Write timestamped log to host `logs/` directory |
+| `api.HostLogRaw(category, text)` | Write raw text to host log (for transcripts) |
+
 ### Background Daemons
 Run long-lived background processes inside NetNIX. Daemons are C# scripts with a `Daemon()` entry point that run on background threads with graceful shutdown support via `CancellationToken`.
 
@@ -120,11 +198,11 @@ daemon: 'httpd' stopped
 Write your own daemons — run `man daemon-writing` inside NetNIX for a complete guide with three copy-paste templates (minimal daemon, HTTP server, file watcher).
 
 ### Built-in HTTP Server (httpd)
-A working HTTP file server daemon that serves the virtual filesystem over localhost. Supports directory listings, content-type detection, custom ports, and custom web roots.
+A working HTTP file server daemon that serves the virtual filesystem over localhost. Supports directory listings, content-type detection, configurable port, web root, default page, and request logging. Configuration in `/etc/httpd.conf`.
 
 ```
-root# edit /etc/sandbox.exceptions    # uncomment httpd lines
-root# daemon start httpd 8080
+root# daemon start httpd
+httpd: listening on http://localhost:8080/  (web root: /var/www)
 # Visit http://localhost:8080/ in your browser
 ```
 
@@ -248,7 +326,10 @@ root# reinstall
 - Background process management: `daemon start`, `stop`, `list`, `status`
 - Daemons implement `static int Daemon(NixApi api, string[] args)`
 - Graceful shutdown via `api.DaemonToken` (CancellationToken)
-- Built-in `httpd` web server daemon
+- Built-in `telnetd` Telnet server and `httpd` web server daemons
+- Configuration files in `/etc/` (managed via `Factory/etc/` in the project)
+- Dual logging: VFS logs for root, host filesystem logs for operators
+- Daemon threads have catch-all exception handling — can never crash the host
 - Full tutorial with three copy-paste templates: `man daemon-writing`
 
 ### Package Manager (npak)
@@ -306,7 +387,7 @@ All of these are plain C# source files compiled and executed at runtime:
 | **Users & Groups** | `useradd`, `userdel`, `usermod`, `groupadd`, `groupdel`, `groupmod` |
 | **Host Filesystem** | `mount`, `umount`, `export`, `importfile` |
 | **Packages** | `npak`, `npak-demo` |
-| **Daemons** | `httpd` |
+| **Daemons** | `httpd`, `telnetd` |
 | **System** | `reinstall` |
 
 ### Shared Libraries (`/lib`)
@@ -341,6 +422,7 @@ Comprehensive `man` pages for every command, library, and topic:
 | `man daemon` | Daemon management commands |
 | `man daemon-writing` | How to write daemons (with templates) |
 | `man httpd` | HTTP server daemon |
+| `man telnetd` | Telnet server daemon (remote access) |
 | `man sandbox` | Script sandbox security |
 | `man sandbox.exceptions` | Per-script sandbox overrides |
 | `man settingslib` | Settings library API |
@@ -468,14 +550,34 @@ root# daemon stop mydaemon
 
 Run `man daemon-writing` for three complete templates including an HTTP server and a file watcher.
 
+### Starting the Telnet Server
+```
+root# edit /etc/telnetd.conf            # customise port, limits, banner, logging
+root# daemon start telnetd
+telnetd: listening on port 2323 (term 80x24, max 8 sessions)
+
+# Connect from any Telnet client:
+telnet localhost 2323
+# Or use PuTTY, Tera Term, etc.
+
+root# daemon stop telnetd
+```
+
+Configuration highlights (`/etc/telnetd.conf`):
+```
+port = 2323              # TCP port
+terminal_width = 80      # default terminal columns
+terminal_height = 24     # default terminal rows (overridden by client NAWS)
+max_sessions = 8         # concurrent session limit (0 = unlimited)
+idle_timeout = 30        # minutes before idle disconnect (0 = never)
+log_sessions = true      # log per-user activity to /var/log/telnetd/<user>.log
+host_log_events = true   # mirror daemon events to host logs/ directory
+```
+
 ### Starting the HTTP Server
 ```
-root# edit /etc/sandbox.exceptions
-# Uncomment these two lines:
-#   httpd  System.Net
-#   httpd  HttpListener(
-
-root# daemon start httpd 8080
+root# edit /etc/httpd.conf              # customise port, web root, logging
+root# daemon start httpd
 httpd: listening on http://localhost:8080/  (web root: /var/www)
 
 root# echo "<h1>Hello World</h1>" > /var/www/index.html
@@ -551,37 +653,45 @@ File metadata (owners, groups, permissions) is stored in a `.vfsmeta` entry insi
 ## Project Structure
 ```
 NetNIX/
-??? Program.cs                  # Entry point — boot, login loop, reset
-??? Shell/
-?   ??? NixShell.cs             # Interactive shell (nsh) + daemon management
-?   ??? TextEditor.cs           # Full-screen text editor
-??? VFS/
-?   ??? VirtualFileSystem.cs    # Zip-backed virtual filesystem + mount system
-?   ??? VfsNode.cs              # File/directory node with permissions
-??? Users/
-?   ??? UserManager.cs          # User & group CRUD, /etc/passwd, /etc/shadow
-?   ??? UserRecord.cs           # User account model
-?   ??? GroupRecord.cs          # Group model
-??? Scripting/
-?   ??? ScriptRunner.cs         # Roslyn compiler + sandbox + exceptions system
-?   ??? NixApi.cs               # API surface exposed to scripts
-?   ??? NixNet.cs               # Networking API (HTTP client)
-?   ??? DaemonManager.cs        # Background daemon lifecycle manager
-??? Setup/
-?   ??? FirstRunSetup.cs        # First-run wizard
-?   ??? BuiltinScripts.cs       # Loader for /bin + /sbin commands
-?   ??? BuiltinLibs.cs          # Loader for /lib libraries
-?   ??? BuiltinManPages.cs      # Loader for man pages from helpman/
-??? Builtins/                   # C# source for all commands (compiled at runtime)
-?   ??? ls.cs, cat.cs, grep.cs, curl.cs, httpd.cs, npak.cs,
-?   ??? mount.cs, export.cs, reinstall.cs, settings-demo.cs, ...
-??? Libs/                       # C# source for shared libraries
-?   ??? netlib.cs, ziplib.cs, settingslib.cs, demoapilib.cs
-??? helpman/                    # Plain-text man pages (83 pages)
-    ??? ls.txt, daemon.txt, daemon-writing.txt, httpd.txt, ...
+|-- Program.cs                  # Entry point - boot, login loop, reset
+|-- Shell/
+|   |-- NixShell.cs             # Interactive shell (nsh) + daemon management
+|   |-- SessionIO.cs            # Thread-safe per-session I/O (local + remote)
+|-- VFS/
+|   |-- VirtualFileSystem.cs    # Zip-backed virtual filesystem + mount system
+|   |-- VfsNode.cs              # File/directory node with permissions
+|-- Users/
+|   |-- UserManager.cs          # User & group CRUD, /etc/passwd, /etc/shadow
+|   |-- UserRecord.cs           # User account model
+|   |-- GroupRecord.cs          # Group model
+|-- Scripting/
+|   |-- ScriptRunner.cs         # Roslyn compiler + sandbox + exceptions system
+|   |-- NixApi.cs               # API surface exposed to scripts
+|   |-- NixNet.cs               # Networking API (HTTP client)
+|   |-- DaemonManager.cs        # Background daemon lifecycle manager
+|-- Config/
+|   |-- NxConfig.cs             # Host-side environment configuration
+|-- Setup/
+|   |-- FirstRunSetup.cs        # First-run wizard
+|   |-- BuiltinScripts.cs       # Loader for /bin + /sbin commands
+|   |-- BuiltinLibs.cs          # Loader for /lib libraries
+|   |-- BuiltinManPages.cs      # Loader for man pages from helpman/
+|   |-- FactoryFiles.cs         # Loader for Factory/ config files
+|-- Builtins/                   # C# source for /bin commands (compiled at runtime)
+|   |-- ls.cs, cat.cs, grep.cs, curl.cs, edit.cs, ...
+|-- SystemBuiltins/             # C# source for /sbin commands (root only)
+|   |-- httpd.cs, telnetd.cs, mount.cs, npak.cs, reinstall.cs, ...
+|-- Factory/                    # Default config files installed to /etc/
+|   |-- etc/
+|       |-- telnetd.conf        # Telnet daemon configuration
+|       |-- httpd.conf          # HTTP daemon configuration
+|-- Libs/                       # C# source for shared libraries
+|   |-- netlib.cs, ziplib.cs, settingslib.cs, demoapilib.cs
+|-- helpman/                    # Plain-text man pages (83+ pages)
+    |-- ls.txt, daemon.txt, telnetd.txt, httpd.txt, ...
 ```
 
-> **Note:** Files in `Builtins/`, `Libs/`, and `helpman/` are **not** compiled as part of the .NET project. They are copied to the output directory as content files and installed into the VFS at first run, where scripts are compiled at runtime by the Roslyn scripting engine.
+> **Note:** Files in `Builtins/`, `SystemBuiltins/`, `Factory/`, `Libs/`, and `helpman/` are **not** compiled as part of the .NET project. They are copied to the output directory as content files and installed into the VFS at first run. Scripts are compiled at runtime by the Roslyn scripting engine. Config files in `Factory/etc/` are only installed if they don't already exist, preserving admin customisations.
 
 ## Technology
 - **.NET 8** console application

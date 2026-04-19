@@ -18,15 +18,95 @@ using NetNIX.Scripting;
 /// </summary>
 public static class HttpdDaemon
 {
+    private const string ConfigPath = "/etc/httpd.conf";
+
+    private class HttpdConfig
+    {
+        public int Port = 8080;
+        public string WebRoot = "/var/www";
+        public string DefaultPage = "index.html";
+        public bool LogEvents = true;
+        public bool HostLogEvents = false;
+    }
+
+    private static HttpdConfig _config = new();
+
+    private static HttpdConfig LoadConfig(NixApi api)
+    {
+        var cfg = new HttpdConfig();
+        if (!api.IsFile(ConfigPath))
+            return cfg;
+
+        try
+        {
+            string content = api.ReadText(ConfigPath);
+            foreach (var rawLine in content.Split('\n'))
+            {
+                string line = rawLine.Trim().TrimEnd('\r');
+                if (line.Length == 0 || line.StartsWith('#')) continue;
+
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+                string key = line.Substring(0, eq).Trim().ToLowerInvariant();
+                string val = line.Substring(eq + 1).Trim();
+
+                switch (key)
+                {
+                    case "port":
+                        if (int.TryParse(val, out int p) && p > 0 && p <= 65535) cfg.Port = p;
+                        break;
+                    case "web_root":
+                        if (val.Length > 0) cfg.WebRoot = val;
+                        break;
+                    case "default_page":
+                        if (val.Length > 0) cfg.DefaultPage = val;
+                        break;
+                    case "log_events":
+                        cfg.LogEvents = val.Equals("true", StringComparison.OrdinalIgnoreCase);
+                        break;
+                    case "host_log_events":
+                        cfg.HostLogEvents = val.Equals("true", StringComparison.OrdinalIgnoreCase);
+                        break;
+                }
+            }
+        }
+        catch { }
+
+        return cfg;
+    }
+
+    private static void LogMessage(NixApi api, string message)
+    {
+        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        string logLine = "[" + timestamp + "] " + message + "\n";
+
+        if (_config.LogEvents)
+        {
+            try
+            {
+                api.AppendText("/var/log/httpd.log", logLine);
+                api.Save();
+            }
+            catch { }
+        }
+
+        if (_config.HostLogEvents)
+        {
+            try { api.HostLog("httpd", message); } catch { }
+        }
+    }
+
     /// <summary>
     /// Daemon entry point — runs on a background thread.
     /// </summary>
     public static int Daemon(NixApi api, string[] args)
     {
-        int port = 8080;
-        string webRoot = "/var/www";
+        _config = LoadConfig(api);
 
-        // Parse args
+        // Command-line args override config
+        int port = _config.Port;
+        string webRoot = _config.WebRoot;
+
         if (args.Length > 0 && int.TryParse(args[0], out int p))
             port = p;
         if (args.Length > 1)
@@ -38,8 +118,8 @@ public static class HttpdDaemon
             api.CreateDirWithParents(webRoot);
         }
 
-        // Create a default index.html if none exists
-        string indexPath = webRoot.TrimEnd('/') + "/index.html";
+        // Create a default index page if none exists
+        string indexPath = webRoot.TrimEnd('/') + "/" + _config.DefaultPage;
         if (!api.IsFile(indexPath))
         {
             api.WriteText(indexPath, """
@@ -70,6 +150,7 @@ public static class HttpdDaemon
         }
 
         Console.WriteLine($"httpd: listening on http://localhost:{port}/  (web root: {webRoot})");
+        LogMessage(api, $"httpd started on port {port}, web root: {webRoot}");
 
         var token = api.DaemonToken;
 
@@ -99,6 +180,7 @@ public static class HttpdDaemon
         {
             try { listener.Stop(); } catch { }
             try { listener.Close(); } catch { }
+            LogMessage(api, "httpd stopped");
             Console.WriteLine("httpd: stopped");
         }
 
@@ -108,7 +190,7 @@ public static class HttpdDaemon
     private static void HandleRequest(NixApi api, HttpListenerContext ctx, string webRoot)
     {
         string urlPath = ctx.Request.Url?.AbsolutePath ?? "/";
-        if (urlPath == "/") urlPath = "/index.html";
+        if (urlPath == "/") urlPath = "/" + _config.DefaultPage;
 
         // Sanitize: no .. traversal
         urlPath = urlPath.Replace("..", "").Replace("\\", "/");
@@ -157,6 +239,9 @@ public static class HttpdDaemon
             ctx.Response.ContentLength64 = body.Length;
             ctx.Response.OutputStream.Write(body, 0, body.Length);
             ctx.Response.Close();
+
+            string remote = ctx.Request.RemoteEndPoint?.ToString() ?? "?";
+            LogMessage(api, $"{remote} {ctx.Request.HttpMethod} {urlPath} {statusCode} {body.Length}");
         }
         catch { /* client may have disconnected */ }
     }

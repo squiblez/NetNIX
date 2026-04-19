@@ -82,6 +82,7 @@ public sealed class DaemonManager
 
         int pid = _nextPid++;
         var api = new NixApi(_fs, _userMgr, user.Uid, user.Gid, user.Username, cwd);
+        api.SetRuntime(_scriptRunner, this);
 
         var info = new DaemonInfo
         {
@@ -110,7 +111,7 @@ public sealed class DaemonManager
             }
             catch (System.Reflection.TargetInvocationException ex) when (ex.InnerException != null)
             {
-                Console.Error.WriteLine($"daemon[{name}]: {ex.InnerException.Message}");
+                try { Console.Error.WriteLine($"daemon[{name}]: {ex.InnerException.Message}"); } catch { }
             }
             catch (OperationCanceledException)
             {
@@ -118,7 +119,8 @@ public sealed class DaemonManager
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"daemon[{name}]: {ex.Message}");
+                // Catch-all: daemon threads must NEVER crash the host process.
+                try { Console.Error.WriteLine($"daemon[{name}]: {ex.Message}"); } catch { }
             }
             finally
             {

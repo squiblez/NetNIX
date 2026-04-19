@@ -20,6 +20,12 @@ public sealed class VirtualFileSystem
     private readonly Dictionary<string, string> _mountPoints = new(StringComparer.Ordinal);
     private readonly HashSet<string> _autoSaveMounts = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Guards all _nodes / _mountPoints access for multi-session safety.
+    /// Read operations take a read lock; mutations take a write lock.
+    /// </summary>
+    private readonly ReaderWriterLockSlim _rwLock = new(LockRecursionPolicy.SupportsRecursion);
+
     public VirtualFileSystem(string archivePath)
     {
         _archivePath = archivePath;
@@ -92,6 +98,9 @@ public sealed class VirtualFileSystem
 
     public void Save()
     {
+        _rwLock.EnterReadLock();
+        try
+        {
         string tempPath = _archivePath + ".tmp";
         using (var stream = File.Create(tempPath))
         using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
@@ -133,42 +142,57 @@ public sealed class VirtualFileSystem
             }
         }
         File.Move(tempPath, _archivePath, overwrite: true);
+        }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     // ?? Query ??????????????????????????????????????????????????????
 
-    public bool Exists(string path) => _nodes.ContainsKey(NormalizePath(path));
-    public bool IsDirectory(string path) => _nodes.TryGetValue(NormalizePath(path), out var n) && n.IsDirectory;
-    public bool IsFile(string path) => _nodes.TryGetValue(NormalizePath(path), out var n) && !n.IsDirectory;
+    public bool Exists(string path) { _rwLock.EnterReadLock(); try { return _nodes.ContainsKey(NormalizePath(path)); } finally { _rwLock.ExitReadLock(); } }
+    public bool IsDirectory(string path) { _rwLock.EnterReadLock(); try { return _nodes.TryGetValue(NormalizePath(path), out var n) && n.IsDirectory; } finally { _rwLock.ExitReadLock(); } }
+    public bool IsFile(string path) { _rwLock.EnterReadLock(); try { return _nodes.TryGetValue(NormalizePath(path), out var n) && !n.IsDirectory; } finally { _rwLock.ExitReadLock(); } }
 
     public VfsNode? GetNode(string path)
     {
-        _nodes.TryGetValue(NormalizePath(path), out var node);
-        return node;
+        _rwLock.EnterReadLock();
+        try
+        {
+            _nodes.TryGetValue(NormalizePath(path), out var node);
+            return node;
+        }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     public IEnumerable<VfsNode> ListDirectory(string path)
     {
         path = NormalizePath(path);
-        if (!IsDirectory(path))
-            return [];
-
-        string prefix = path == "/" ? "/" : path + "/";
-        var results = new List<VfsNode>();
-        foreach (var (k, v) in _nodes)
+        _rwLock.EnterReadLock();
+        try
         {
-            if (k == path) continue;
-            if (!k.StartsWith(prefix)) continue;
-            // Only immediate children
-            string remainder = k[prefix.Length..];
-            if (!remainder.Contains('/'))
-                results.Add(v);
+            if (!_nodes.TryGetValue(path, out var dirNode) || !dirNode.IsDirectory)
+                return [];
+
+            string prefix = path == "/" ? "/" : path + "/";
+            var results = new List<VfsNode>();
+            foreach (var (k, v) in _nodes)
+            {
+                if (k == path) continue;
+                if (!k.StartsWith(prefix)) continue;
+                string remainder = k[prefix.Length..];
+                if (!remainder.Contains('/'))
+                    results.Add(v);
+            }
+            return results;
         }
-        return results;
+        finally { _rwLock.ExitReadLock(); }
     }
 
-    public string[] GetAllPaths() =>
-        _nodes.Keys.OrderBy(k => k).ToArray();
+    public string[] GetAllPaths()
+    {
+        _rwLock.EnterReadLock();
+        try { return _nodes.Keys.OrderBy(k => k).ToArray(); }
+        finally { _rwLock.ExitReadLock(); }
+    }
 
     // ?? Mutation ???????????????????????????????????????????????????
 
@@ -190,125 +214,157 @@ public sealed class VirtualFileSystem
     public VfsNode CreateDirectory(string path, int ownerId, int groupId, string permissions = "rwxr-xr-x")
     {
         path = NormalizePath(path);
-        if (_nodes.ContainsKey(path))
-            throw new IOException($"Path already exists: {path}");
+        _rwLock.EnterWriteLock();
+        try
+        {
+            if (_nodes.ContainsKey(path))
+                throw new IOException($"Path already exists: {path}");
 
-        if (!EnsureParentExists(path))
-            return null;
+            if (!EnsureParentExists(path))
+                return null;
 
-        var node = new VfsNode(path, true, ownerId, groupId, permissions);
-        _nodes[path] = node;
-        AutoSaveIfMounted(path);
-        return node;
+            var node = new VfsNode(path, true, ownerId, groupId, permissions);
+            _nodes[path] = node;
+            AutoSaveIfMounted(path);
+            return node;
+        }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public VfsNode CreateFile(string path, int ownerId, int groupId, byte[]? data = null, string permissions = "rw-r--r--")
     {
         path = NormalizePath(path);
-        if (!EnsureParentExists(path))
-            return null;
-
-        var node = new VfsNode(path, false, ownerId, groupId, permissions)
+        _rwLock.EnterWriteLock();
+        try
         {
-            Data = data
-        };
-        _nodes[path] = node;
-        AutoSaveIfMounted(path);
-        return node;
+            if (!EnsureParentExists(path))
+                return null;
+
+            var node = new VfsNode(path, false, ownerId, groupId, permissions)
+            {
+                Data = data
+            };
+            _nodes[path] = node;
+            AutoSaveIfMounted(path);
+            return node;
+        }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public void WriteFile(string path, byte[] data)
     {
         path = NormalizePath(path);
-        if (!_nodes.TryGetValue(path, out var node) || node.IsDirectory)
-            throw new IOException($"Not a file: {path}");
-        node.Data = data;
-        AutoSaveIfMounted(path);
+        _rwLock.EnterWriteLock();
+        try
+        {
+            if (!_nodes.TryGetValue(path, out var node) || node.IsDirectory)
+                throw new IOException($"Not a file: {path}");
+            node.Data = data;
+            AutoSaveIfMounted(path);
+        }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public byte[] ReadFile(string path)
     {
         path = NormalizePath(path);
-        if (!_nodes.TryGetValue(path, out var node) || node.IsDirectory)
-            throw new IOException($"Not a file: {path}");
-        return node.Data ?? [];
+        _rwLock.EnterReadLock();
+        try
+        {
+            if (!_nodes.TryGetValue(path, out var node) || node.IsDirectory)
+                throw new IOException($"Not a file: {path}");
+            return node.Data ?? [];
+        }
+        finally { _rwLock.ExitReadLock(); }
     }
 
     public void Delete(string path)
     {
         path = NormalizePath(path);
         if (path == "/") throw new IOException("Cannot delete root");
-        if (!_nodes.ContainsKey(path))
-            throw new IOException($"Path not found: {path}");
+        _rwLock.EnterWriteLock();
+        try
+        {
+            if (!_nodes.ContainsKey(path))
+                throw new IOException($"Path not found: {path}");
 
-        // If directory, remove everything beneath it
-        var toRemove = _nodes.Keys.Where(k => k == path || k.StartsWith(path + "/")).ToList();
-        foreach (var k in toRemove)
-            _nodes.Remove(k);
-        AutoSaveIfMounted(path);
+            var toRemove = _nodes.Keys.Where(k => k == path || k.StartsWith(path + "/")).ToList();
+            foreach (var k in toRemove)
+                _nodes.Remove(k);
+            AutoSaveIfMounted(path);
+        }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public void Move(string src, string dest)
     {
         src = NormalizePath(src);
         dest = NormalizePath(dest);
-
-        if (!_nodes.ContainsKey(src))
-            throw new IOException($"Source not found: {src}");
-
-        if (!EnsureParentExists(dest))
-            return;
-
-        var keysToMove = _nodes.Keys.Where(k => k == src || k.StartsWith(src + "/")).ToList();
-        var movedPairs = new List<(string oldKey, VfsNode node)>();
-
-        foreach (var key in keysToMove)
+        _rwLock.EnterWriteLock();
+        try
         {
-            var node = _nodes[key];
-            _nodes.Remove(key);
-            string newKey = dest + key[src.Length..];
-            node.Path = newKey;
-            movedPairs.Add((key, node));
-        }
+            if (!_nodes.ContainsKey(src))
+                throw new IOException($"Source not found: {src}");
 
-        foreach (var (_, node) in movedPairs)
-            _nodes[node.Path] = node;
-        AutoSaveIfMounted(src);
-        AutoSaveIfMounted(dest);
+            if (!EnsureParentExists(dest))
+                return;
+
+            var keysToMove = _nodes.Keys.Where(k => k == src || k.StartsWith(src + "/")).ToList();
+            var movedPairs = new List<(string oldKey, VfsNode node)>();
+
+            foreach (var key in keysToMove)
+            {
+                var node = _nodes[key];
+                _nodes.Remove(key);
+                string newKey = dest + key[src.Length..];
+                node.Path = newKey;
+                movedPairs.Add((key, node));
+            }
+
+            foreach (var (_, node) in movedPairs)
+                _nodes[node.Path] = node;
+            AutoSaveIfMounted(src);
+            AutoSaveIfMounted(dest);
+        }
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     public void Copy(string src, string dest, int ownerId, int groupId)
     {
         src = NormalizePath(src);
         dest = NormalizePath(dest);
-
-        if (!_nodes.TryGetValue(src, out var srcNode))
-            throw new IOException($"Source not found: {src}");
-
-        if (!EnsureParentExists(dest))
-            return;
-
-        if (srcNode.IsDirectory)
+        _rwLock.EnterWriteLock();
+        try
         {
-            var keysToMove = _nodes.Keys.Where(k => k == src || k.StartsWith(src + "/")).ToList();
-            foreach (var key in keysToMove)
+            if (!_nodes.TryGetValue(src, out var srcNode))
+                throw new IOException($"Source not found: {src}");
+
+            if (!EnsureParentExists(dest))
+                return;
+
+            if (srcNode.IsDirectory)
             {
-                var orig = _nodes[key];
-                string newKey = dest + key[src.Length..];
-                _nodes[newKey] = new VfsNode(newKey, orig.IsDirectory, ownerId, groupId, orig.Permissions)
+                var keysToMove = _nodes.Keys.Where(k => k == src || k.StartsWith(src + "/")).ToList();
+                foreach (var key in keysToMove)
                 {
-                    Data = orig.Data?.ToArray()
+                    var orig = _nodes[key];
+                    string newKey = dest + key[src.Length..];
+                    _nodes[newKey] = new VfsNode(newKey, orig.IsDirectory, ownerId, groupId, orig.Permissions)
+                    {
+                        Data = orig.Data?.ToArray()
+                    };
+                }
+            }
+            else
+            {
+                _nodes[dest] = new VfsNode(dest, false, ownerId, groupId, srcNode.Permissions)
+                {
+                    Data = srcNode.Data?.ToArray()
                 };
             }
+            AutoSaveIfMounted(dest);
         }
-        else
-        {
-            _nodes[dest] = new VfsNode(dest, false, ownerId, groupId, srcNode.Permissions)
-            {
-                Data = srcNode.Data?.ToArray()
-            };
-        }
-        AutoSaveIfMounted(dest);
+        finally { _rwLock.ExitWriteLock(); }
     }
 
     // ?? Mount / Unmount ????????????????????????????????????????????

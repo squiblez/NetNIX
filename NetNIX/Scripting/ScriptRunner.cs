@@ -190,19 +190,23 @@ public sealed class ScriptRunner
 
         var api = new NixApi(_fs, _userMgr, user.Uid, user.Gid, user.Username, cwd);
 
+        // Temporarily redirect Console.In/Out to the current session's streams
+        // so that scripts using Console.Write/ReadLine get the right I/O.
+        using var consoleRedirect = NetNIX.Shell.SessionIO.RedirectConsoleForScript();
+
         try
         {
             entry.Invoke(null, [api, args]);
         }
         catch (TargetInvocationException ex) when (ex.InnerException != null)
         {
-            Console.ResetColor();
-            Console.Error.WriteLine($"nsh: {label}: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+            try { Console.ResetColor(); } catch { }
+            try { Console.Error.WriteLine($"nsh: {label}: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}"); } catch { }
         }
         catch (Exception ex)
         {
-            Console.ResetColor();
-            Console.Error.WriteLine($"nsh: {label}: {ex.GetType().Name}: {ex.Message}");
+            try { Console.ResetColor(); } catch { }
+            try { Console.Error.WriteLine($"nsh: {label}: {ex.GetType().Name}: {ex.Message}"); } catch { }
         }
     }
 
@@ -602,6 +606,16 @@ public sealed class ScriptRunner
         # httpd  System.Net
         # httpd  HttpListener(
 
+        # telnetd — Telnet server daemon for remote multi-user access
+        # Enable these exceptions then run: daemon start telnetd /sbin/telnetd.cs
+        # Works on both Windows and Linux hosts.
+        telnetd  System.Net
+        telnetd  System.Net.Sockets
+        telnetd  System.IO
+        telnetd  TcpListener(
+        telnetd  TcpClient(
+        telnetd  Socket(
+
         # nxconfig — host environment configuration (reads/writes config file)
         nxconfig  System.IO
         nxconfig  File.Exists
@@ -618,9 +632,9 @@ public sealed class ScriptRunner
     /// </summary>
     private static readonly Dictionary<string, string[]> ExceptionAssemblies = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["System.Net"] = ["System.Net.Primitives", "System.Net.HttpListener", "System.Net.Sockets", "System.Net.Http", "System.Private.Uri"],
+        ["System.Net"] = ["System.Net.Primitives", "System.Net.HttpListener", "System.Net.Sockets", "System.Net.Http", "System.Private.Uri", "Microsoft.Win32.Primitives"],
         ["System.Net.Http"] = ["System.Net.Http", "System.Net.Primitives"],
-        ["System.Net.Sockets"] = ["System.Net.Sockets", "System.Net.Primitives"],
+        ["System.Net.Sockets"] = ["System.Net.Sockets", "System.Net.Primitives", "Microsoft.Win32.Primitives"],
         ["System.IO"] = ["System.IO.FileSystem", "System.IO.FileSystem.Primitives"],
         ["System.Diagnostics"] = ["System.Diagnostics.Process"],
     };

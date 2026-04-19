@@ -436,11 +436,19 @@ public static class FirstRunSetup
             // covered by GetDirectories, e.g. deeply nested paths)
             EnsureParentDirs(fs, path);
 
+            // Never overwrite config files in /etc/ — admin may have customised them
+            if (path.StartsWith("/etc/") && path.EndsWith(".conf") && fs.IsFile(path))
+                continue;
+
             // Files in /bin/ or /sbin/ should be executable
             string perms = (path.StartsWith("/bin/") || path.StartsWith("/sbin/") ||
                             path.StartsWith("/usr/bin/") || path.StartsWith("/usr/sbin/") ||
                             path.StartsWith("/usr/local/bin/") || path.EndsWith(".sh"))
                 ? "rwxr-xr-x" : "rw-r--r--";
+
+            // Config files should be root-readable only
+            if (path.StartsWith("/etc/") && path.EndsWith(".conf"))
+                perms = "rw-r-----";
 
             if (fs.IsFile(path))
                 fs.WriteFile(path, data);

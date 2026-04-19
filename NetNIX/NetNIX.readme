@@ -20,15 +20,18 @@ TABLE OF CONTENTS
   13. The Sandbox
   14. The Package Manager (npak)
   15. Daemon Services
-  16. User & Group Management
-  17. The Text Editor
-  18. Networking API
-  19. Configuration (nxconfig)
-  20. Mount System
-  21. Manual Pages
-  22. Extending NetNIX
-  23. Project Structure
-  24. License & Contributing
+  16. Telnet Remote Access (telnetd)
+  17. HTTP Server (httpd)
+  18. Daemon Configuration & Logging
+  19. User & Group Management
+  20. The Text Editor
+  21. Networking API
+  22. Configuration (nxconfig)
+  23. Mount System
+  24. Manual Pages
+  25. Extending NetNIX
+  26. Project Structure
+  27. License & Contributing
 
 ================================================================================
 1. WHAT IS NETNIX?
@@ -102,7 +105,20 @@ is to UNIX workstations.
     • Background script execution on dedicated threads
     • Graceful shutdown via CancellationToken
     • Start/stop/list/log management commands
+    • Built-in telnetd daemon for multi-user remote Telnet access
     • Built-in httpd daemon for serving /var/www over HTTP
+    • Configuration files in /etc/ (telnetd.conf, httpd.conf)
+    • Dual logging: VFS logs for root, host filesystem logs for operators
+
+  Remote Access (telnetd)
+    • Full multi-user Telnet server with login authentication
+    • Multiple simultaneous sessions on independent threads
+    • Automatic terminal size detection via NAWS protocol
+    • Configurable session limits, idle timeout, and login attempts
+    • Customisable login banner and welcome message
+    • Per-user session activity logging
+    • Graceful disconnect handling — remote sessions can never crash the host
+    • Cross-platform: Windows, Linux, macOS
 
   Networking
     • HTTP GET, POST, PUT, DELETE, PATCH exposed through api.Net
@@ -113,22 +129,28 @@ is to UNIX workstations.
     • Used by curl, wget, fetch, npak, and user scripts
 
   Built-in Text Editor
-    • Line-based editor accessible via the "edit" command
-    • Insert, delete, replace, copy, move lines
+    • Full-screen editor accessible via the "edit" command
+    • Vertical and horizontal scrolling for large files
+    • Line numbers, auto-indent, cut/paste lines, code templates
     • Search and go-to-line
+    • Works over Telnet with automatic terminal size detection
     • Suitable for editing scripts, configs, and documents in-place
 
   Configuration System
     • Host-side config (config/netnix.conf) for boot behaviour
     • In-VFS nxconfig command for managing host settings from inside
     • Instance naming, boot banners, MOTD, auto-save, reset control
+    • Daemon configuration files in /etc/ (telnetd.conf, httpd.conf)
+    • Factory default configs in Factory/etc/ — editable in the IDE
+    • Config files never overwritten on update (admin edits preserved)
     • Settings library for script-level persistent key/value storage
 
   Comprehensive Man Pages
-    • 50+ manual pages covering every command and concept
+    • 80+ manual pages covering every command and concept
     • man <topic>, man --list, man -k <keyword> search
     • Topics include: api, scripting, sandbox, filesystem, permissions,
-      editor, include, daemon-writing, settingslib, and more
+      editor, include, daemon-writing, telnetd, httpd, settingslib,
+      and more
 
 ================================================================================
 3. WHO IS IT FOR?
@@ -349,6 +371,7 @@ is to UNIX workstations.
     npak-demo     Demonstrate package creation
     nxconfig      View/edit host-side configuration
     httpd         HTTP server daemon
+    telnetd       Telnet server daemon (remote multi-user access)
 
 ================================================================================
 9. THE VIRTUAL FILE SYSTEM
@@ -377,6 +400,8 @@ is to UNIX workstations.
     /etc/motd       Message of the day
     /etc/sandbox.conf       Sandbox rules
     /etc/sandbox.exceptions Per-script sandbox overrides
+    /etc/telnetd.conf       Telnet daemon configuration
+    /etc/httpd.conf         HTTP daemon configuration
     /etc/skel       Skeleton files for new users
     /etc/npak       Package manager configuration
     /home           User home directories
@@ -390,6 +415,9 @@ is to UNIX workstations.
     /var            Variable data
     /var/lib/npak   Installed package database
     /var/log        Log files
+    /var/log/telnetd.log    Telnet daemon event log (root only)
+    /var/log/telnetd/       Per-user session logs (root only)
+    /var/log/httpd.log      HTTP daemon event/access log (root only)
     /var/www        Web server document root
     /mnt            Mount points for external archives
     /media          Removable media mount points
@@ -501,8 +529,13 @@ is to UNIX workstations.
       api.CanWrite(path)
       api.CanExecute(path)
       api.GetPermissions(path)
+      api.Chmod(path, perms)       Change permissions (owner/root only)
 
-    Networking (see Section 18):
+    Host Logging:
+      api.HostLog(category, msg)   Write timestamped log to host logs/
+      api.HostLogRaw(category, txt) Write raw text to host log file
+
+    Networking (see Section 21):
       api.Net.Get(url)
       api.Net.Post(url, body)
       ... and more
@@ -709,12 +742,212 @@ is to UNIX workstations.
 
   Built-in Daemons
   ────────────────
-    httpd — A simple HTTP server that serves files from /var/www.
-    Enable it with sandbox exceptions for System.Net, then:
-      daemon start httpd /sbin/httpd.cs
+    telnetd — Multi-user Telnet server for remote shell access (see §16)
+    httpd   — HTTP file server for /var/www (see §17)
+
+  See "man daemon-writing" for three complete daemon templates.
 
 ================================================================================
-16. USER & GROUP MANAGEMENT
+16. TELNET REMOTE ACCESS (telnetd)
+================================================================================
+
+  telnetd is a full Telnet server daemon that allows remote users to connect
+  to the NetNIX environment over the network using any standard Telnet client.
+  Multiple simultaneous connections are supported — each connection gets its
+  own login prompt and complete shell session, all sharing the same VFS.
+
+  Starting the Server
+  ───────────────────
+    daemon start telnetd
+    telnetd: listening on port 2323 (term 80x24, max 8 sessions)
+
+  Connecting
+  ──────────
+    From any machine on the network:
+      telnet <host> 2323
+
+    Works with PuTTY, Windows telnet, Linux telnet, Tera Term, and any
+    other Telnet-capable client.
+
+  Features
+  ────────
+    • Full nsh shell access for remote users
+    • Multi-user: multiple simultaneous sessions on independent threads
+    • Login authentication using NetNIX user accounts
+    • Automatic terminal size detection via NAWS protocol negotiation
+    • Configurable session limits, idle timeout, and max login attempts
+    • Customisable login banner and welcome message with placeholders
+    • Per-user session activity logging (commands typed, output)
+    • Dual logging to VFS (/var/log/telnetd/) and host (logs/)
+    • ANSI terminal support (colors, cursor movement, clear screen)
+    • Interactive editor works fully over Telnet with correct sizing
+    • Graceful disconnect handling — never crashes the host process
+    • Cross-platform: Windows, Linux, macOS
+
+  Terminal Size
+  ─────────────
+    telnetd negotiates terminal dimensions automatically using the Telnet
+    NAWS (Negotiate About Window Size) protocol. When a client connects:
+
+    1. Server sends IAC DO NAWS to request the client's window size
+    2. Client responds with its actual width and height
+    3. If the client resizes its window, it sends an updated NAWS
+
+    The terminal dimensions are used by the text editor, pager, and any
+    command that needs to know the screen size. If a client does not
+    support NAWS, the defaults from /etc/telnetd.conf are used.
+
+  Session I/O Safety
+  ──────────────────
+    Remote sessions are fully isolated from the host process. If a client
+    disconnects unexpectedly:
+
+    • Writes to the dead connection are silently swallowed
+    • Reads return null/EOF, causing the shell to exit cleanly
+    • ReadKey returns Escape, causing interactive commands to quit
+    • No exception from any remote session can propagate to crash the host
+
+    This is handled by SessionIO, which wraps all remote I/O with
+    SafeRemoteWriter, SafeRemoteReader, and exception-safe ReadKey.
+
+  Configuration
+  ─────────────
+    telnetd reads /etc/telnetd.conf on startup. The default config is
+    installed from Factory/etc/telnetd.conf and can be edited in the IDE
+    or via "edit /etc/telnetd.conf" inside NetNIX.
+
+    Settings:
+      port                TCP port (default 2323)
+      terminal_width      Default terminal columns (default 80)
+      terminal_height     Default terminal rows (default 24)
+      max_sessions        Max concurrent sessions, 0=unlimited (default 8)
+      max_login_attempts  Failed logins before disconnect (default 5)
+      idle_timeout        Idle timeout in minutes, 0=none (default 30)
+      login_banner        Banner text on connect (default "NetNIX Remote Access")
+      welcome_message     Post-login message; supports {user} and {session}
+
+    Logging settings (see §18 for details):
+      log_events          Log daemon events to VFS (default true)
+      log_sessions        Log per-user activity to VFS (default false)
+      host_log_events     Log daemon events to host (default false)
+      host_log_sessions   Log per-user activity to host (default false)
+
+  Security
+  ────────
+    • Only root can start the daemon
+    • All users must authenticate with their NetNIX password
+    • Failed logins are logged with the remote IP address
+    • Connections are dropped after max_login_attempts failures
+    • Sessions time out after idle_timeout minutes of inactivity
+    • Log files are restricted to root (rw-------)
+    • Telnet does NOT encrypt traffic — use on trusted networks only
+
+  See "man telnetd" for complete documentation.
+
+================================================================================
+17. HTTP SERVER (httpd)
+================================================================================
+
+  httpd is a simple HTTP file server daemon that serves the virtual
+  filesystem over localhost.
+
+  Starting the Server
+  ───────────────────
+    daemon start httpd
+    httpd: listening on http://localhost:8080/  (web root: /var/www)
+
+  Features
+  ────────
+    • Serves files from the VFS web root directory
+    • Automatic directory listings for folders
+    • Content-type detection for common file types
+    • Configurable port, web root, and default page
+    • Request logging with remote IP, method, path, and status code
+    • Dual logging to VFS and host filesystem
+
+  Configuration
+  ─────────────
+    httpd reads /etc/httpd.conf on startup. The default config is
+    installed from Factory/etc/httpd.conf.
+
+    Settings:
+      port              TCP port (default 8080)
+      web_root          VFS directory to serve (default /var/www)
+      default_page      Default filename for directory requests (default index.html)
+
+    Logging settings (see §18 for details):
+      log_events        Log requests and events to VFS (default true)
+      host_log_events   Log requests and events to host (default false)
+
+  Command-line arguments override config file values:
+    daemon start httpd 9090           # port 9090
+    daemon start httpd 9090 /srv/web  # port 9090, custom web root
+
+  See "man httpd" for complete documentation.
+
+================================================================================
+18. DAEMON CONFIGURATION & LOGGING
+================================================================================
+
+  Both telnetd and httpd use a common configuration and logging pattern.
+
+  Configuration Files
+  ───────────────────
+    Daemon configs live in /etc/ as plain text key=value files:
+
+      /etc/telnetd.conf    Telnet daemon settings
+      /etc/httpd.conf      HTTP daemon settings
+
+    Lines starting with # are comments. Changes take effect on daemon restart.
+
+  Factory Defaults
+  ────────────────
+    Default config files are maintained in the Factory/etc/ directory in
+    the project source tree. These are editable in the IDE and are installed
+    to the VFS on first run. The installer NEVER overwrites existing .conf
+    files in /etc/, so administrator customisations are always preserved
+    across updates.
+
+  Dual Logging System
+  ───────────────────
+    Daemons can log to two destinations independently:
+
+    VFS Logging (viewable by root inside NetNIX):
+      log_events = true       → /var/log/<daemon>.log
+      log_sessions = true     → /var/log/telnetd/<user>.log  (telnetd only)
+
+    Host Logging (written to real files on the host machine):
+      host_log_events = true  → logs/<daemon>.log
+      host_log_sessions = true → logs/telnetd-<user>.log  (telnetd only)
+
+    Host logs are written to a logs/ directory next to the NetNIX executable
+    via the api.HostLog() and api.HostLogRaw() methods. These are accessible
+    to the host machine operator without needing to log into NetNIX.
+
+  Log Security
+  ────────────
+    All VFS log files and directories are created with root-only permissions:
+      /var/log/telnetd.log      → rw-------
+      /var/log/telnetd/         → rwx------
+      /var/log/telnetd/<user>.log → rw-------
+
+    Regular users cannot read daemon logs.
+
+  Using Logging in Your Own Daemons
+  ─────────────────────────────────
+    The HostLog API is available to any script:
+
+      api.HostLog("mydaemon", "server started on port 1234");
+      // Writes: [2025-01-15 14:30:00] server started on port 1234
+      // To:     logs/mydaemon.log
+
+      api.HostLogRaw("mydaemon-transcript", line + "\n");
+      // Appends raw text (no timestamp) to logs/mydaemon-transcript.log
+
+    Category names are sanitised to prevent path traversal.
+
+================================================================================
+19. USER & GROUP MANAGEMENT
 ================================================================================
 
   Users
@@ -752,32 +985,50 @@ is to UNIX workstations.
     Skeleton files:   /etc/skel (copied to new home directories)
 
 ================================================================================
-17. THE TEXT EDITOR
+20. THE TEXT EDITOR
 ================================================================================
 
-  NetNIX includes a line-based text editor, invoked with:
+  NetNIX includes a full-screen text editor (nedit), invoked with:
 
     edit <filename>
 
-  The editor loads the file (or creates a new one) and presents a numbered
-  line listing. Commands are entered at the "edit>" prompt:
+  The editor displays a title bar, line-numbered content area, status bar,
+  and shortcut bar. It supports both vertical and horizontal scrolling for
+  files of any size.
 
-    i <n> <text>     Insert text at line n
-    a <text>         Append text at the end
-    d <n>            Delete line n
-    r <n> <text>     Replace line n
-    p                Print all lines with numbers
-    s <text>         Search for text
-    g <n>            Go to / display line n
-    w                Write (save) the file
-    q                Quit (prompts if unsaved)
-    wq               Write and quit
-    h                Show help
+  Keyboard Shortcuts
+  ──────────────────
+    F2 / Ctrl+W     Save the file
+    Ctrl+Q          Quit (prompts if unsaved changes)
+    Ctrl+G          Go to a specific line number
+    Ctrl+K          Cut the current line
+    Ctrl+U          Paste the last cut line
+    Ctrl+T          Insert a code template
+    Arrow keys      Move the cursor
+    Home / End      Jump to start / end of line
+    Page Up/Down    Scroll by page
+    Tab             Insert 4 spaces
+    Enter           New line with auto-indent
+
+  Horizontal Scrolling
+  ────────────────────
+    Lines longer than the terminal width scroll automatically as the
+    cursor moves. The line number gutter shows "<|" when the view is
+    scrolled right, indicating content exists to the left.
+
+  Remote Session Support
+  ──────────────────────
+    The editor works fully over Telnet sessions. It uses SessionIO to
+    detect the terminal dimensions (via NAWS protocol negotiation or
+    the telnetd.conf defaults) and renders correctly at any size.
+
+    If a remote client disconnects mid-edit, the editor exits gracefully
+    without crashing or leaving stale content on reconnection.
 
   See "man editor" or "man edit" for full documentation.
 
 ================================================================================
-18. NETWORKING API
+21. NETWORKING API
 ================================================================================
 
   Scripts access the network through api.Net, which provides synchronous
@@ -807,7 +1058,7 @@ is to UNIX workstations.
   sandbox. Always use api.Net for network access.
 
 ================================================================================
-19. CONFIGURATION (nxconfig)
+22. CONFIGURATION (nxconfig)
 ================================================================================
 
   NetNIX has a host-side configuration file (config/netnix.conf) that
@@ -838,7 +1089,7 @@ is to UNIX workstations.
     This completely destroys the current rootfs and starts fresh.
 
 ================================================================================
-20. MOUNT SYSTEM
+23. MOUNT SYSTEM
 ================================================================================
 
   External .zip archives can be mounted into the VFS at any path:
@@ -857,10 +1108,10 @@ is to UNIX workstations.
   content from external sources.
 
 ================================================================================
-21. MANUAL PAGES
+24. MANUAL PAGES
 ================================================================================
 
-  NetNIX ships with 50+ manual pages covering every command and concept.
+  NetNIX ships with 80+ manual pages covering every command and concept.
 
     man <topic>          Read a manual page
     man --list           List all available pages
@@ -879,6 +1130,7 @@ is to UNIX workstations.
     man settingslib      Settings library for scripts
     man daemon           Daemon management
     man daemon-writing   How to write daemon scripts
+    man telnetd          Telnet server daemon (remote access)
     man httpd            HTTP server daemon
     man npak             Package manager guide
     man nshrc            Shell startup scripts
@@ -889,7 +1141,7 @@ is to UNIX workstations.
     edit /usr/share/man/mytopic.txt
 
 ================================================================================
-22. EXTENDING NETNIX
+25. EXTENDING NETNIX
 ================================================================================
 
   Adding Commands at Runtime
@@ -923,6 +1175,14 @@ is to UNIX workstations.
     maps directly to VFS paths:
       Factory/etc/myapp/config.txt → /etc/myapp/config.txt
 
+    Configuration files (.conf) in Factory/etc/ are only installed if
+    they don't already exist in the VFS, preserving admin customisations.
+    They are also set to root-only permissions (rw-r-----).
+
+    Current factory config files:
+      Factory/etc/telnetd.conf     Telnet daemon configuration
+      Factory/etc/httpd.conf       HTTP daemon configuration
+
   Creating Packages
   ─────────────────
     Bundle scripts, libraries, and man pages into .npak archives for
@@ -939,7 +1199,7 @@ is to UNIX workstations.
     • Create entirely new subsystems
 
 ================================================================================
-23. PROJECT STRUCTURE
+26. PROJECT STRUCTURE
 ================================================================================
 
   NetNIX/
@@ -948,7 +1208,8 @@ is to UNIX workstations.
   ├── NetNIX.readme               This file
   │
   ├── Shell/
-  │   └── NixShell.cs             Interactive shell (nsh) with builtins
+  │   ├── NixShell.cs             Interactive shell (nsh) with builtins
+  │   └── SessionIO.cs            Thread-safe per-session I/O (local + remote)
   │
   ├── VFS/
   │   ├── VirtualFileSystem.cs    ZIP-backed virtual filesystem
@@ -956,7 +1217,7 @@ is to UNIX workstations.
   │
   ├── Scripting/
   │   ├── ScriptRunner.cs         Roslyn-based C# script compiler/runner
-  │   ├── NixApi.cs               API surface exposed to scripts
+  │   ├── NixApi.cs               API surface (file I/O, users, chmod, logging)
   │   ├── NixNet.cs               Networking API (HTTP client)
   │   └── DaemonManager.cs        Background service manager
   │
@@ -973,7 +1234,7 @@ is to UNIX workstations.
   │   ├── BuiltinScripts.cs       Loader for Builtins/ and SystemBuiltins/
   │   ├── BuiltinLibs.cs          Loader for Libs/
   │   ├── BuiltinManPages.cs      Loader for helpman/
-  │   └── FactoryFiles.cs         Loader for Factory/
+  │   └── FactoryFiles.cs         Loader for Factory/ (config preservation)
   │
   ├── Builtins/                   User commands (.cs) → /bin
   │   ├── ls.cs, cat.cs, cp.cs, mv.cs, rm.cs, mkdir.cs, ...
@@ -986,7 +1247,7 @@ is to UNIX workstations.
   │   ├── groupadd.cs, groupdel.cs, groupmod.cs
   │   ├── mount.cs, umount.cs, export.cs, importfile.cs
   │   ├── npak.cs, npak-demo.cs, nxconfig.cs
-  │   ├── httpd.cs, reinstall.cs
+  │   ├── telnetd.cs, httpd.cs, reinstall.cs
   │   └── ...
   │
   ├── Libs/                       Libraries (.cs) → /lib
@@ -996,19 +1257,21 @@ is to UNIX workstations.
   │   └── ziplib.cs
   │
   ├── helpman/                    Manual pages (.txt) → /usr/share/man
-  │   ├── (50+ .txt files for every command and concept)
+  │   ├── (80+ .txt files for every command and concept)
   │   └── ...
   │
   └── Factory/                    Factory files → / (preserving structure)
       ├── bin/
       │   └── scripting-demo.sh
       └── etc/
+          ├── telnetd.conf        Telnet daemon configuration
+          ├── httpd.conf          HTTP daemon configuration
           └── opt/
               └── koder/
                   └── commandprompt.txt
 
 ================================================================================
-24. LICENSE & CONTRIBUTING
+27. LICENSE & CONTRIBUTING
 ================================================================================
 
   NetNIX is open source. Visit the repository for license details and
