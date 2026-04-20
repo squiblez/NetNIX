@@ -327,15 +327,22 @@ public static class TelnetDaemon
         string banner = _config.LoginBanner;
         if (banner.Length > 0)
         {
-            int boxWidth = Math.Max(banner.Length + 6, 40);
+            int boxWidth = Math.Max(banner.Length + 6, 60);
             string inner = $"  {banner}  ";
             int pad = boxWidth - 2 - inner.Length;
             if (pad < 0) pad = 0;
 
+            string connectedLine = "  Connected via Telnet daemon";
+            string webLine = "  Web:    netnix.controlfeed.info";
+            string sourceLine = "  Source: github.com/squiblez/NetNIX";
+
             writer.WriteLine("");
             writer.WriteLine("?" + new string('?', boxWidth - 2) + "?");
             writer.WriteLine("?" + inner + new string(' ', pad) + "?");
-            writer.WriteLine("?" + "  Connected via Telnet daemon" + new string(' ', boxWidth - 2 - "  Connected via Telnet daemon".Length) + "?");
+            writer.WriteLine("?" + connectedLine + new string(' ', boxWidth - 2 - connectedLine.Length) + "?");
+            writer.WriteLine("?" + new string(' ', boxWidth - 2) + "?");
+            writer.WriteLine("?" + webLine + new string(' ', boxWidth - 2 - webLine.Length) + "?");
+            writer.WriteLine("?" + sourceLine + new string(' ', boxWidth - 2 - sourceLine.Length) + "?");
             writer.WriteLine("?" + new string('?', boxWidth - 2) + "?");
             writer.WriteLine("");
         }

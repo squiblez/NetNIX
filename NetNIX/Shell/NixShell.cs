@@ -10,7 +10,7 @@ using NetNIX.Users;
 using NetNIX.VFS;
 
 namespace NetNIX.Shell;
-
+//v3
 /// <summary>
 /// Interactive UNIX-like shell (nsh — NetNIX Shell).
 /// Supports both local console and remote (Telnet) sessions.

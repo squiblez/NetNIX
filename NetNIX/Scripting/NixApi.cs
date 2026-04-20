@@ -345,6 +345,34 @@ public sealed class NixApi
         return true;
     }
 
+    /// <summary>
+    /// Change the owner and/or group of a file or directory.
+    /// Only root can change ownership.
+    /// </summary>
+    /// <param name="path">VFS path to the file or directory.</param>
+    /// <param name="ownerId">New owner UID, or -1 to leave unchanged.</param>
+    /// <param name="groupId">New group GID, or -1 to leave unchanged.</param>
+    public bool Chown(string path, int ownerId = -1, int groupId = -1)
+    {
+        string resolved = ResolvePath(path);
+        var node = _fs.GetNode(resolved);
+        if (node == null)
+        {
+            Console.WriteLine($"chown: {path}: No such file or directory");
+            return false;
+        }
+        if (Uid != 0)
+        {
+            Console.WriteLine($"chown: {path}: Permission denied (must be root)");
+            return false;
+        }
+        if (ownerId >= 0)
+            node.OwnerId = ownerId;
+        if (groupId >= 0)
+            node.GroupId = groupId;
+        return true;
+    }
+
     public void Copy(string src, string dest)
     {
         string resolvedSrc = ResolvePath(src);
@@ -398,6 +426,12 @@ public sealed class NixApi
 
     public string? GetUsername(int uid) =>
         _userMgr.GetUser(uid)?.Username;
+
+    public int GetUid(string username)
+    {
+        var user = _userMgr.GetUser(username);
+        return user?.Uid ?? -1;
+    }
 
     public string? GetGroupName(int gid) =>
         _userMgr.GetGroup(gid)?.Name;
@@ -637,17 +671,19 @@ public sealed class NixApi
     // ?? Factory reinstall ????????????????????????????????????????????
 
     /// <summary>
-    /// Reinstall factory binaries, libraries, man pages, and factory files.
+    /// Reinstall factory binaries, libraries, man pages, and optionally factory files.
     /// Overwrites existing files with the versions shipped with the executable.
     /// Root only.
     /// </summary>
-    public bool ReinstallFactory()
+    /// <param name="includeFactoryFiles">If true, also reinstalls factory config files from /etc.</param>
+    public bool ReinstallFactory(bool includeFactoryFiles = true)
     {
         if (!RequireRoot("reinstall")) return false;
         NetNIX.Setup.FirstRunSetup.InstallBuiltinScripts(_fs);
         NetNIX.Setup.FirstRunSetup.InstallBuiltinLibs(_fs);
         NetNIX.Setup.FirstRunSetup.InstallManPages(_fs);
-        NetNIX.Setup.FirstRunSetup.InstallFactoryFiles(_fs);
+        if (includeFactoryFiles)
+            NetNIX.Setup.FirstRunSetup.InstallFactoryFiles(_fs);
         _fs.Save();
         return true;
     }

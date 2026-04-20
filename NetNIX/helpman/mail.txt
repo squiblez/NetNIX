@@ -1,0 +1,205 @@
+        MAIL(1)                   NetNIX Manual                   MAIL(1)
+
+        NAME
+            mail - send and read messages between local NetNIX users
+
+        SYNOPSIS
+            mail
+            mail -r <number>
+            mail -d <number>
+            mail -s "<subject>" <user> [<user> ...]
+            mail --setup | --init
+            mail -h | --help
+
+        DESCRIPTION
+            mail is a small local message system, similar in spirit to the
+            classic UNIX mail(1) program but limited to users on the same
+            NetNIX system. There is no remote delivery, no SMTP, and no
+            networking - messages are stored as plain text inside the
+            virtual file system and read back by the recipient when they
+            run mail.
+
+            Each user has a single mailbox file:
+
+                /var/mail/<username>
+
+            New messages are appended to the recipient's mailbox in a
+            simple mbox-style format. The first time a user receives mail,
+            the mailbox file is created with permissions rw-rw-rw- so any
+            local user can deliver to it and the recipient can read or
+            delete messages from it.
+
+            Run with no arguments, mail lists every message currently in
+            your own inbox, with an index number, the sender, the
+            timestamp, and the subject line.
+
+        OPTIONS
+            (no args)        List the messages in your own mailbox.
+
+            -r N             Read message number N (as shown by the list).
+
+            -d N             Delete message number N from your mailbox.
+                             Remaining messages are renumbered.
+
+            -s "Subject"     Send a new message. The subject must be
+                             quoted if it contains spaces. One or more
+                             recipient usernames must follow.
+
+            --setup          Initialize the mail system by creating empty
+            --init           mailboxes for all users with proper ownership
+                             and permissions. This must be run as root.
+                             Existing mailboxes are skipped. This is the
+                             recommended way to set up the mail system
+                             before users start sending messages.
+
+            -h, --help       Show short usage and exit.
+
+        SETUP
+            Before users start sending mail to each other, it is highly
+            recommended that root initializes the mail system by running:
+
+                # mail --setup
+
+            This will:
+            * Create an empty mailbox file for every user in /var/mail/
+            * Set ownership to each user (uid and gid)
+            * Set permissions to rw-rw-rw- so anyone can send mail
+            * Skip mailboxes that already exist
+
+            Example output:
+
+                # mail --setup
+                Setting up mail system for all users...
+
+                  root: mailbox created
+                  alice: mailbox created
+                  bob: mailbox created
+
+                Mail system setup complete:
+                  Created: 3 mailboxes
+                  Skipped: 0 (already exist)
+                  Total users: 3
+
+            Running --setup ensures that:
+            * All mailboxes have correct ownership from the start
+            * No permission issues when users read their mail
+            * The mail system is ready to use immediately
+
+            You can run --setup again later to create mailboxes for newly
+            added users without affecting existing mailboxes.
+
+        SENDING
+            When sending, mail reads the message body from standard input.
+            Type the body line-by-line and finish with a single dot ('.')
+            on a line by itself, or press the EOF key. Example:
+
+                $ mail -s "Lunch?" alice
+                (Enter message body. End with a single '.' on a line, or EOF.)
+                Hi Alice,
+                Want to grab lunch around noon?
+                -- bob
+                .
+                mail: delivered to 1 recipient.
+
+            Multiple recipients are supported - just list them after the
+            subject:
+
+                $ mail -s "Meeting at 3" alice carol dave
+
+            Each recipient receives an independent copy in their own
+            mailbox.
+
+        READING
+            Run mail with no arguments to see a numbered list:
+
+                $ mail
+                Mailbox: /var/mail/alice  (2 messages)
+                  N  From            Date                  Subject
+                  -  ----            ----                  -------
+                   1 bob             2026-01-02T10:14:00Z  Lunch?
+                   2 root            2026-01-02T11:00:00Z  System maintenance
+
+            Read a specific message with -r:
+
+                $ mail -r 1
+                From:    bob
+                Date:    2026-01-02T10:14:00Z
+                Subject: Lunch?
+
+                Hi Alice,
+                Want to grab lunch around noon?
+                -- bob
+
+            Delete a message with -d:
+
+                $ mail -d 1
+                mail: deleted message 1.
+
+        FILES
+            /var/mail/                Spool directory (sticky, world-
+                                      writable - like /tmp).
+            /var/mail/<username>      The mailbox file for <username>.
+                                      Created on first delivery with
+                                      permissions rw-rw-rw-.
+
+        OWNERSHIP
+            The recommended way to set up mailboxes is to run:
+
+                # mail --setup
+
+            This creates all mailboxes with proper ownership from the start,
+            avoiding permission issues.
+
+            If mailboxes are created on-the-fly during message delivery:
+
+            * When root sends the first message to a user, the mailbox is
+              created and ownership is set to that user.
+
+            * When a non-root user sends the first message to another user,
+              the mailbox is created with the sender as the owner, but with
+              rw-rw-rw- permissions so the recipient can still read and
+              delete messages.
+
+            To avoid ownership confusion, always run 'mail --setup' as root
+            before users start sending mail.
+
+        EXIT STATUS
+            0   Success.
+            1   Error (unknown user, missing argument, bad message
+                number, etc.).
+
+        NOTES
+            * Mailboxes are plain text and can be inspected with cat,
+              less, or grep.
+            * There is no notion of "unread" mail - listing and reading
+              do not modify the mailbox.
+            * Mailbox files use world-writable permissions (rw-rw-rw-)
+              in the default configuration. This allows any user to send
+              mail to any other user, and recipients can read/delete
+              their own messages.
+            * For better privacy, a system administrator can manually
+              adjust mailbox permissions after creation, or pre-create
+              mailboxes with restrictive permissions (e.g., rw-------).
+            * This command is intended for cooperative local messaging,
+              not for confidential communication in multi-user
+              environments.
+            * The mail command source can be viewed with:
+                  cat /bin/mail.cs
+
+        EXAMPLES
+            Initialize mail system (as root):
+                # mail --setup
+
+            List your inbox:
+                $ mail
+
+            Read and delete messages:
+                $ mail -r 3                           Read message 3.
+                $ mail -d 3                           Delete message 3.
+
+            Send mail:
+                $ mail -s "Hi" alice                  Send a message to alice.
+                $ mail -s "Notice" alice bob carol    Send to multiple users.
+
+        SEE ALSO
+            cat(1), echo(1), id(1), users, chmod(1), chown(1), filesystem
