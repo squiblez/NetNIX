@@ -50,10 +50,15 @@ public sealed class VfsNode
     public bool CanExecute(int uid, int gid)
     {
         if (uid == 0) return true;
-        if (OwnerId == uid) return Permissions.Length >= 3 && Permissions[2] == 'x';
-        if (GroupId == gid) return Permissions.Length >= 6 && Permissions[5] == 'x';
-        return Permissions.Length >= 9 && Permissions[8] == 'x';
+        // Execute slots may also contain 's' (setuid/setgid + exec) or
+        // 't' (sticky + exec). All three grant traverse/execute rights.
+        // Uppercase 'S' / 'T' indicate setuid/sticky WITHOUT execute.
+        if (OwnerId == uid) return Permissions.Length >= 3 && IsExecChar(Permissions[2]);
+        if (GroupId == gid) return Permissions.Length >= 6 && IsExecChar(Permissions[5]);
+        return Permissions.Length >= 9 && IsExecChar(Permissions[8]);
     }
+
+    private static bool IsExecChar(char c) => c == 'x' || c == 's' || c == 't';
 
     public string PermissionString()
     {

@@ -27,6 +27,16 @@ public static class HeadCommand
 
         if (files.Count == 0)
         {
+            // No file argument - read from stdin if it's piped, else error.
+            if (Console.IsInputRedirected || NetNIX.Shell.NixShell.IsPiped)
+            {
+                string input = Console.In.ReadToEnd();
+                var lines = input.Split('\n');
+                int take = Math.Min(count, lines.Length);
+                for (int i = 0; i < take; i++)
+                    Console.WriteLine(lines[i]);
+                return 0;
+            }
             Console.WriteLine("head: missing operand");
             return 1;
         }

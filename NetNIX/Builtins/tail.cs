@@ -27,6 +27,16 @@ public static class TailCommand
 
         if (files.Count == 0)
         {
+            // No file argument - read from stdin if it's piped, else error.
+            if (Console.IsInputRedirected || NetNIX.Shell.NixShell.IsPiped)
+            {
+                string input = Console.In.ReadToEnd();
+                var lines = input.Split('\n');
+                int start = Math.Max(0, lines.Length - count);
+                for (int i = start; i < lines.Length; i++)
+                    Console.WriteLine(lines[i]);
+                return 0;
+            }
             Console.WriteLine("tail: missing operand");
             return 1;
         }

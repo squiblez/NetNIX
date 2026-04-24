@@ -412,7 +412,21 @@ public static class FirstRunSetup
         Console.WriteLine($"  Installed {pages.Count} man pages in /usr/share/man/");
     }
 
-    public static void InstallFactoryFiles(VirtualFileSystem fs)
+    /// <summary>
+    /// How <see cref="InstallFactoryFiles"/> should treat existing files.
+    /// </summary>
+    public enum FactoryOverwritePolicy
+    {
+        /// <summary>Overwrite without prompting (the reinstall default).</summary>
+        Always,
+        /// <summary>Skip files that already exist (preserves admin edits).</summary>
+        Never,
+        /// <summary>Prompt y/n/a/q for each existing file.</summary>
+        Ask,
+    }
+
+    public static void InstallFactoryFiles(VirtualFileSystem fs,
+        FactoryOverwritePolicy policy = FactoryOverwritePolicy.Always)
     {
         // Ensure all required directories exist first
         var dirs = FactoryFiles.GetDirectories();
@@ -430,15 +444,43 @@ public static class FirstRunSetup
             return;
         }
 
+        // Local mutable state for the Ask policy: 'a' upgrades to
+        // overwriteAll, 'q' upgrades to skipAll for the rest of the run.
+        bool overwriteAll = (policy == FactoryOverwritePolicy.Always);
+        bool skipAll = false;
+        int written = 0;
+        int skipped = 0;
+        int created = 0;
+
         foreach (var (path, data) in files)
         {
             // Ensure parent directories exist (in case they aren't
             // covered by GetDirectories, e.g. deeply nested paths)
             EnsureParentDirs(fs, path);
 
-            // Never overwrite config files in /etc/ — admin may have customised them
-            if (path.StartsWith("/etc/") && path.EndsWith(".conf") && fs.IsFile(path))
-                continue;
+            bool fileExists = fs.IsFile(path);
+
+            if (fileExists)
+            {
+                if (skipAll) { skipped++; continue; }
+                if (!overwriteAll)
+                {
+                    if (policy == FactoryOverwritePolicy.Never)
+                    {
+                        skipped++;
+                        continue;
+                    }
+                    if (policy == FactoryOverwritePolicy.Ask)
+                    {
+                        Console.WriteLine($"The file '{path}' already exists (y=overwrite, n=ignore, a=overwrite all, q=ignore all)");
+                        Console.Write("> ");
+                        string ans = (Console.ReadLine() ?? "").Trim().ToLowerInvariant();
+                        if (ans == "a") { overwriteAll = true; }
+                        else if (ans == "q") { skipAll = true; skipped++; continue; }
+                        else if (ans != "y") { skipped++; continue; }
+                    }
+                }
+            }
 
             // Files in /bin/ or /sbin/ should be executable
             string perms = (path.StartsWith("/bin/") || path.StartsWith("/sbin/") ||
@@ -450,13 +492,19 @@ public static class FirstRunSetup
             if (path.StartsWith("/etc/") && path.EndsWith(".conf"))
                 perms = "rw-r-----";
 
-            if (fs.IsFile(path))
+            if (fileExists)
+            {
                 fs.WriteFile(path, data);
+                written++;
+            }
             else
+            {
                 fs.CreateFile(path, 0, 0, data, perms);
+                created++;
+            }
         }
 
-        Console.WriteLine($"  Installed {files.Count} factory file(s)");
+        Console.WriteLine($"  Installed {created + written} factory file(s) ({created} new, {written} overwritten, {skipped} kept)");
     }
 
     private static void EnsureParentDirs(VirtualFileSystem fs, string path)

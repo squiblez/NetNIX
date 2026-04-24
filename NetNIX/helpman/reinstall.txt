@@ -4,7 +4,7 @@
             reinstall - restore factory binaries, libraries, and man pages
 
         SYNOPSIS
-            reinstall [--no-factory] [--skip-factory]
+            reinstall [--ask-factory | --keep-factory | --no-factory]
             reinstall -h | --help
 
         DESCRIPTION
@@ -17,61 +17,92 @@
             * A built-in command or library has been accidentally modified
             * Files in /bin, /sbin, or /lib have been deleted or corrupted
             * You want to restore the default manual pages
+            * You want to reset a factory config (e.g. /etc/httpd.conf,
+              /etc/telnetd.conf, /etc/nxagent.conf) back to its shipped
+              default after experimenting with it
 
-            By default, reinstall also restores factory configuration
-            files stored in the Factory/ directory and installed to /etc.
-            This includes files like:
-                /etc/httpd.conf
-                /etc/telnetd.conf
-                /etc/nshrc
-
-            To preserve your customized configuration files, use the
-            --no-factory option.
+            By default reinstall now OVERWRITES every factory file it
+            finds, including configs in /etc. This is the behaviour you
+            usually want after a NetNIX update. To preserve customised
+            configs, use --keep-factory; to be prompted per-file, use
+            --ask-factory; to skip the factory-files step entirely, use
+            --no-factory.
 
         OPTIONS
-            --no-factory     Skip reinstalling factory config files from
-            --skip-factory   the /etc directory. Binaries, libraries, and
-                             man pages are still restored, but your
-                             existing /etc configuration is preserved.
+            --ask-factory    For each factory file that already exists in
+                             the VFS, prompt:
+                                 (y) overwrite this one
+                                 (n) ignore this one
+                                 (a) overwrite all remaining
+                                 (q) ignore all remaining
+                             Useful when most factory files should be
+                             refreshed but a couple have local edits.
+
+            --keep-factory   Reinstall everything but skip any factory
+                             file that already exists. Equivalent to the
+                             pre-fix legacy behaviour.
+
+            --no-factory     Skip the entire factory-files step. Binaries,
+            --skip-factory   libraries, and man pages are still restored,
+                             but nothing under /etc (or any other Factory/
+                             path) is touched.
 
             -h, --help       Show usage information and exit.
 
+            --ask-factory, --keep-factory and --no-factory are mutually
+            exclusive.
+
         WHAT GETS RESTORED
-            Without --no-factory (default behavior):
+            Default (no flags - overwrite everything):
                 /bin/*.cs              Built-in user commands
                 /sbin/*.cs             Built-in system/admin commands
                 /lib/*.cs              Built-in libraries
                 /usr/share/man/*.txt   Manual pages
                 /etc/*                 Factory configuration files
+                                       (overwritten)
+
+            With --ask-factory:
+                Same as default, but you confirm each existing /etc file.
+
+            With --keep-factory:
+                Same as default, but any factory file that already exists
+                is left untouched.
 
             With --no-factory:
                 /bin/*.cs              Built-in user commands
                 /sbin/*.cs             Built-in system/admin commands
                 /lib/*.cs              Built-in libraries
                 /usr/share/man/*.txt   Manual pages
-                (Config files in /etc are NOT touched)
+                (Nothing in /etc is touched at all.)
 
         WHAT DOES NOT GET AFFECTED
             * User home directories (/home/*, /root)
             * User data in /var, /tmp, /opt
             * Mounted archives
             * User accounts and groups (/etc/passwd, /etc/shadow,
-              /etc/group) — these are managed separately
+              /etc/group) - these are managed separately
             * Custom scripts you have written in /bin or /sbin
               (they will be overwritten only if they have the same
               name as a factory builtin)
 
         EXAMPLES
-            Full reinstall (default):
+            Full reinstall, overwrite all factory configs (default):
                 # reinstall
 
-            Reinstall binaries only, preserve /etc configs:
+            Reinstall but be asked about each existing /etc file:
+                # reinstall --ask-factory
+                The file '/etc/sandbox.conf' already exists (y=overwrite, n=ignore, a=overwrite all, q=ignore all)
+                > y
+                The file '/etc/telnetd.conf' already exists (y=overwrite, n=ignore, a=overwrite all, q=ignore all)
+                > a
+                  Installed 12 factory file(s) (3 new, 9 overwritten, 0 kept)
+
+            Reinstall but keep all existing /etc edits:
+                # reinstall --keep-factory
+
+            Reinstall binaries only, leave /etc completely alone:
                 # reinstall --no-factory
                 # reinstall --skip-factory
-
-            After a NetNIX update, restore new commands but keep
-            your customized httpd.conf and telnetd.conf:
-                # reinstall --no-factory
 
         PERMISSIONS
             Only root can run this command. Attempting to run it as a
@@ -80,8 +111,8 @@
 
         EXIT STATUS
             0   Success - factory files restored.
-            1   Error - permission denied, unknown option, or internal
-                failure.
+            1   Error - permission denied, unknown option, conflicting
+                flags, or internal failure.
 
         NOTES
             * The factory source files are embedded in the NetNIX
@@ -94,6 +125,8 @@
             * If you want to export a backup before reinstalling, use
               the export command to save your current filesystem state
               to a zip archive first.
+            * The summary line "(N new, N overwritten, N kept)" reports
+              what actually happened to factory files.
 
         SEE ALSO
             export(1), import, mount(1), filesystem, man(1)

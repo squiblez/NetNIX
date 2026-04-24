@@ -99,49 +99,67 @@ public sealed class VirtualFileSystem
     public void Save()
     {
         _rwLock.EnterReadLock();
+        string tempPath = _archivePath + ".tmp";
         try
         {
-        string tempPath = _archivePath + ".tmp";
-        using (var stream = File.Create(tempPath))
-        using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
-        {
-            var metaSb = new StringBuilder();
-
-            foreach (var (path, node) in _nodes.OrderBy(kv => kv.Key))
+            using (var stream = File.Create(tempPath))
+            using (var zip = new ZipArchive(stream, ZipArchiveMode.Create))
             {
-                if (path == "/") continue; // root is implicit
+                var metaSb = new StringBuilder();
 
-                // Skip nodes that belong to a mounted archive (transient)
-                if (IsMounted(path)) continue;
-
-                string entryName = path.TrimStart('/');
-
-                if (node.IsDirectory)
+                foreach (var (path, node) in _nodes.OrderBy(kv => kv.Key))
                 {
-                    zip.CreateEntry(entryName + "/");
-                }
-                else
-                {
-                    var entry = zip.CreateEntry(entryName, CompressionLevel.SmallestSize);
-                    if (node.Data != null)
+                    if (path == "/") continue; // root is implicit
+
+                    // Skip nodes that belong to a mounted archive (transient)
+                    if (IsMounted(path)) continue;
+
+                    string entryName = path.TrimStart('/');
+
+                    if (node.IsDirectory)
                     {
-                        using var es = entry.Open();
-                        es.Write(node.Data, 0, node.Data.Length);
+                        zip.CreateEntry(entryName + "/");
                     }
+                    else
+                    {
+                        var entry = zip.CreateEntry(entryName, CompressionLevel.SmallestSize);
+                        if (node.Data != null)
+                        {
+                            using var es = entry.Open();
+                            es.Write(node.Data, 0, node.Data.Length);
+                        }
+                    }
+
+                    metaSb.AppendLine($"{path}\t{node.OwnerId}\t{node.GroupId}\t{node.Permissions}");
                 }
 
-                metaSb.AppendLine($"{path}\t{node.OwnerId}\t{node.GroupId}\t{node.Permissions}");
+                // Write metadata
+                var meta = zip.CreateEntry(".vfsmeta");
+                using (var ms = meta.Open())
+                using (var writer = new StreamWriter(ms))
+                {
+                    writer.Write(metaSb.ToString());
+                }
             }
-
-            // Write metadata
-            var meta = zip.CreateEntry(".vfsmeta");
-            using (var ms = meta.Open())
-            using (var writer = new StreamWriter(ms))
-            {
-                writer.Write(metaSb.ToString());
-            }
+            File.Move(tempPath, _archivePath, overwrite: true);
         }
-        File.Move(tempPath, _archivePath, overwrite: true);
+        catch (Exception ex) when (
+            ex is UnauthorizedAccessException
+                or IOException
+                or System.Security.SecurityException)
+        {
+            // Host I/O failure (locked archive, antivirus, read-only disk,
+            // permission denied on the working directory, etc.). This must
+            // NOT propagate - if it did, every command that modifies the
+            // VFS would crash the calling shell thread, which in the case
+            // of nxagent kills the agent's inner shell and silently
+            // wedges the daemon. Route the message to whichever session
+            // (local console, telnetd, or daemon-spawned shell) triggered
+            // the save, so the operator sees what happened.
+            string msg = $"vfs: save failed: {ex.GetType().Name}: {ex.Message}";
+            try { NetNIX.Shell.SessionIO.Out.WriteLine(msg); } catch { }
+            // Best-effort cleanup of the orphaned temp file.
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
         }
         finally { _rwLock.ExitReadLock(); }
     }

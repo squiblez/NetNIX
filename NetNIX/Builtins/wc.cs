@@ -5,12 +5,6 @@ public static class WcCommand
 {
     public static int Run(NixApi api, string[] args)
     {
-        if (args.Length == 0)
-        {
-            Console.WriteLine("wc: missing operand");
-            return 1;
-        }
-
         var argList = new System.Collections.Generic.List<string>(args);
         bool showLines = argList.Remove("-l");
         bool showWords = argList.Remove("-w");
@@ -18,6 +12,26 @@ public static class WcCommand
         if (!showLines && !showWords && !showBytes)
         {
             showLines = showWords = showBytes = true;
+        }
+
+        if (argList.Count == 0)
+        {
+            // No file argument - read from stdin if it's piped, else error.
+            if (Console.IsInputRedirected || NetNIX.Shell.NixShell.IsPiped)
+            {
+                string text = Console.In.ReadToEnd();
+                int lines = text.Split('\n').Length;
+                int words = text.Split(new[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).Length;
+                int bytes = System.Text.Encoding.UTF8.GetByteCount(text);
+                string result = "";
+                if (showLines) result += $"  {lines,6}";
+                if (showWords) result += $"  {words,6}";
+                if (showBytes) result += $"  {bytes,6}";
+                Console.WriteLine(result);
+                return 0;
+            }
+            Console.WriteLine("wc: missing operand");
+            return 1;
         }
 
         int totalLines = 0, totalWords = 0, totalBytes = 0;

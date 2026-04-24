@@ -27,8 +27,15 @@ public sealed class ScriptRunner
     private readonly VirtualFileSystem _fs;
     private readonly UserManager _userMgr;
 
-    // Simple in-memory cache: source hash ? compiled assembly
-    private readonly Dictionary<int, Assembly> _cache = [];
+    // Thread-safe cache: source hash -> compiled assembly.
+    // Must be concurrent because ScriptRunner is shared across every
+    // session thread (local user shell + each Telnet session + each
+    // daemon-spawned inner shell such as nxagent's). A non-concurrent
+    // Dictionary here was returning assemblies belonging to the wrong
+    // script under load - the symptom was sporadic
+    // "nsh: <cmd>: script has no static Run(NixApi, string[]) method"
+    // errors when an unrelated script's assembly came back.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, Assembly> _cache = new();
 
     // Search path for commands (in order)
     private static readonly string[] SearchDirs = ["/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin"];
@@ -38,6 +45,17 @@ public sealed class ScriptRunner
         _fs = fs;
         _userMgr = userMgr;
     }
+
+    /// <summary>
+    /// Exit code of the most recently executed script. Read by the
+    /// shell after TryRunCommand / RunFile so chain operators (&amp;&amp;,
+    /// ||) can react to script failures. Conventional values:
+    ///   0   - success
+    ///   126 - permission denied or no Run method
+    ///   127 - command not found (set by the shell, not here)
+    ///   other non-zero values are whatever the script returned.
+    /// </summary>
+    public int LastExitCode { get; private set; }
 
     /// <summary>
     /// Attempts to find and run a script command.
@@ -55,7 +73,8 @@ public sealed class ScriptRunner
 
         if (!node.CanRead(user.Uid, user.Gid))
         {
-            Console.WriteLine($"nsh: {command}: Permission denied");
+            Diag($"nsh: {command}: Permission denied");
+            LastExitCode = 126;
             return true;
         }
 
@@ -71,7 +90,7 @@ public sealed class ScriptRunner
     {
         if (!_fs.IsFile(vfsPath))
         {
-            Console.WriteLine($"run: {vfsPath}: No such file");
+            Diag($"run: {vfsPath}: No such file");
             return;
         }
 
@@ -79,11 +98,31 @@ public sealed class ScriptRunner
         RunSource(source, args, user, cwd, vfsPath);
     }
 
+    /// <summary>
+    /// Write a diagnostic line to the *calling thread's* session writer.
+    /// Routes through SessionIO so messages always reach the session that
+    /// ran the command, never leak to another session's terminal.
+    /// </summary>
+    private static void Diag(string message)
+    {
+        try { NetNIX.Shell.SessionIO.Out.WriteLine(message); } catch { }
+    }
+
     // ?? Internal ???????????????????????????????????????????????????
 
     private string? ResolveCommand(string command, string cwd)
     {
-        // If command contains a slash, treat as explicit path
+        // If command contains a slash, treat as an explicit path. This is
+        // the ONLY way to run a file from the current working directory:
+        // the user must type "./mycommand" (or any other relative or
+        // absolute path containing a slash). Bare command names are
+        // resolved exclusively against the search PATH below.
+        //
+        // This matches standard UNIX shell behaviour and prevents the
+        // classic "." in PATH security/correctness hazard - a stray file
+        // named 'ls' or 'echo' in the cwd must NEVER shadow the real
+        // builtin just because the user happens to be standing in that
+        // directory.
         if (command.Contains('/'))
         {
             string resolved = VirtualFileSystem.ResolvePath(cwd, command);
@@ -92,12 +131,7 @@ public sealed class ScriptRunner
             return null;
         }
 
-        // Check current working directory first
-        string cwdPath = cwd.TrimEnd('/') + "/" + command;
-        if (_fs.IsFile(cwdPath) && !IsShellScript(cwdPath)) return cwdPath;
-        if (_fs.IsFile(cwdPath + ".cs")) return cwdPath + ".cs";
-
-        // Search the PATH directories
+        // Bare command name: search the PATH directories in order.
         foreach (var dir in SearchDirs)
         {
             string candidate = dir + "/" + command + ".cs";
@@ -170,7 +204,7 @@ public sealed class ScriptRunner
         {
             assembly = CompileExtended(source, label, extraAssemblies);
             if (assembly == null) return; // errors already printed
-            _cache[hash] = assembly;
+            _cache.TryAdd(hash, assembly);
         }
 
         // Find the Run(NixApi, string[]) method
@@ -184,7 +218,8 @@ public sealed class ScriptRunner
 
         if (entry == null)
         {
-            Console.WriteLine($"nsh: {label}: script has no static Run(NixApi, string[]) method");
+            Diag($"nsh: {label}: script has no static Run(NixApi, string[]) method");
+            LastExitCode = 126;
             return;
         }
 
@@ -196,17 +231,23 @@ public sealed class ScriptRunner
 
         try
         {
-            entry.Invoke(null, [api, args]);
+            object? result = entry.Invoke(null, [api, args]);
+            // Capture the script's exit code so the shell's '&&' / '||'
+            // chain operators can react to it. If the script returns
+            // void or anything other than int, treat it as success.
+            LastExitCode = (result is int code) ? code : 0;
         }
         catch (TargetInvocationException ex) when (ex.InnerException != null)
         {
             try { Console.ResetColor(); } catch { }
-            try { Console.Error.WriteLine($"nsh: {label}: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}"); } catch { }
+            Diag($"nsh: {label}: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+            LastExitCode = 1;
         }
         catch (Exception ex)
         {
             try { Console.ResetColor(); } catch { }
-            try { Console.Error.WriteLine($"nsh: {label}: {ex.GetType().Name}: {ex.Message}"); } catch { }
+            Diag($"nsh: {label}: {ex.GetType().Name}: {ex.Message}");
+            LastExitCode = 1;
         }
     }
 
@@ -319,7 +360,7 @@ public sealed class ScriptRunner
 
         if (vfsPath == null)
         {
-            Console.WriteLine($"nsh: {label}: include not found: {rest}");
+            Diag($"nsh: {label}: include not found: {rest}");
             return null;
         }
 
@@ -520,10 +561,10 @@ public sealed class ScriptRunner
                         if (exceptions != null && (exceptions.Contains(blocked) || exceptions.Contains(ns)))
                             continue;
 
-                        Console.WriteLine($"nsh: {label}: blocked — 'using {ns}' is not permitted");
-                        Console.WriteLine($"  Namespace '{blocked}' is blocked by /etc/sandbox.conf");
-                        Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
-                        Console.WriteLine("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
+                        Diag($"nsh: {label}: blocked — 'using {ns}' is not permitted");
+                        Diag($"  Namespace '{blocked}' is blocked by /etc/sandbox.conf");
+                        Diag("  Scripts must use the NixApi for all file, network, and system operations.");
+                        Diag("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
                         return false;
                     }
                 }
@@ -539,10 +580,10 @@ public sealed class ScriptRunner
                 if (exceptions != null && exceptions.Contains(token))
                     continue;
 
-                Console.WriteLine($"nsh: {label}: blocked — use of '{token}' is not permitted");
-                Console.WriteLine("  This pattern is blocked by /etc/sandbox.conf");
-                Console.WriteLine("  Scripts must use the NixApi for all file, network, and system operations.");
-                Console.WriteLine("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
+                Diag($"nsh: {label}: blocked — use of '{token}' is not permitted");
+                Diag("  This pattern is blocked by /etc/sandbox.conf");
+                Diag("  Scripts must use the NixApi for all file, network, and system operations.");
+                Diag("  Root can edit /etc/sandbox.conf to modify sandbox rules.");
                 return false;
             }
         }
@@ -709,9 +750,9 @@ public sealed class ScriptRunner
 
         if (!result.Success)
         {
-            Console.WriteLine($"nsh: {label}: compilation failed:");
+            Diag($"nsh: {label}: compilation failed:");
             foreach (var diag in result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error))
-                Console.WriteLine($"  {diag}");
+                Diag($"  {diag}");
             return null;
         }
 

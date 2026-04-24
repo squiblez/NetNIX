@@ -5,18 +5,34 @@ public static class CatCommand
 {
     public static int Run(NixApi api, string[] args)
     {
-        if (args.Length == 0)
-        {
-            Console.WriteLine("cat: missing operand");
-            return 1;
-        }
-
         bool number = false;
         var files = new System.Collections.Generic.List<string>();
         foreach (var a in args)
         {
             if (a == "-n") number = true;
             else files.Add(a);
+        }
+
+        if (files.Count == 0)
+        {
+            // No file argument - read from stdin if it's piped, else error.
+            if (Console.IsInputRedirected || NetNIX.Shell.NixShell.IsPiped)
+            {
+                string text = Console.In.ReadToEnd();
+                if (number)
+                {
+                    var lines = text.Split('\n');
+                    for (int i = 0; i < lines.Length; i++)
+                        Console.WriteLine($"  {i + 1}\t{lines[i]}");
+                }
+                else
+                {
+                    Console.Write(text);
+                }
+                return 0;
+            }
+            Console.WriteLine("cat: missing operand");
+            return 1;
         }
 
         foreach (var file in files)

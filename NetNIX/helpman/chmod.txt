@@ -11,16 +11,28 @@
             file owner or root can change permissions.
 
         MODES
-            String format:  rwxr-xr-x  (9 characters, owner/group/other)
-            Octal format:   755         (3 digits)
+            String format:    rwxr-xr-x   (9 characters, owner/group/other)
+            Octal format:     755          (3 digits)
+            Symbolic format:  +x, -w, u+x, g-w, o=r, a+rx, ug+rw, etc.
+                              May be comma-separated: u+x,g+r,o-w
 
             Permission bits:
               r = read (4)    w = write (2)    x = execute (1)
+
+            Symbolic clauses:
+              who    u (owner), g (group), o (other), a (all - default)
+              op     +  add the listed bits
+                     -  remove the listed bits
+                     =  set permission to exactly the listed bits
 
         EXAMPLES
             chmod rwxr-xr-x /bin/myscript.cs
             chmod 755 /bin/myscript.cs
             chmod 644 notes.txt
+            chmod +x myscript.cs            # add execute for everyone
+            chmod u+w,g-w secret.txt        # owner can write, group cannot
+            chmod a-x privatefile           # remove execute from everyone
+            chmod o=r public.txt            # other gets exactly read
 
         SEE ALSO
             chown, stat, man permissions

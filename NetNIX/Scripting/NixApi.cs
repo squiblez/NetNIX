@@ -676,14 +676,17 @@ public sealed class NixApi
     /// Root only.
     /// </summary>
     /// <param name="includeFactoryFiles">If true, also reinstalls factory config files from /etc.</param>
-    public bool ReinstallFactory(bool includeFactoryFiles = true)
+    /// <param name="factoryPolicy">How to treat existing factory files. Default: overwrite without asking.</param>
+    public bool ReinstallFactory(bool includeFactoryFiles = true,
+        NetNIX.Setup.FirstRunSetup.FactoryOverwritePolicy factoryPolicy =
+            NetNIX.Setup.FirstRunSetup.FactoryOverwritePolicy.Always)
     {
         if (!RequireRoot("reinstall")) return false;
         NetNIX.Setup.FirstRunSetup.InstallBuiltinScripts(_fs);
         NetNIX.Setup.FirstRunSetup.InstallBuiltinLibs(_fs);
         NetNIX.Setup.FirstRunSetup.InstallManPages(_fs);
         if (includeFactoryFiles)
-            NetNIX.Setup.FirstRunSetup.InstallFactoryFiles(_fs);
+            NetNIX.Setup.FirstRunSetup.InstallFactoryFiles(_fs, factoryPolicy);
         _fs.Save();
         return true;
     }

@@ -113,6 +113,7 @@ public static class MailCommand
 
         var users = api.GetAllUsers();
         int created = 0;
+        int repaired = 0;
         int skipped = 0;
 
         foreach (var (uid, username, gid, home) in users)
@@ -121,8 +122,29 @@ public static class MailCommand
 
             if (api.IsFile(mbox))
             {
-                Console.WriteLine($"  {username}: mailbox already exists, skipping");
-                skipped++;
+                // Repair ownership and permissions even if the file exists,
+                // in case it was created with the wrong owner by a non-root
+                // sender or has restrictive permissions.
+                int currentOwner = api.GetOwner(mbox);
+                int currentGroup = api.GetGroup(mbox);
+                string currentPerms = api.GetPermissions(mbox);
+
+                bool needsFix = currentOwner != uid
+                             || currentGroup != gid
+                             || currentPerms != "rw-rw-rw-";
+
+                if (needsFix)
+                {
+                    api.Chown(mbox, uid, gid);
+                    api.Chmod(mbox, "rw-rw-rw-");
+                    Console.WriteLine($"  {username}: mailbox repaired (ownership/permissions reset)");
+                    repaired++;
+                }
+                else
+                {
+                    Console.WriteLine($"  {username}: mailbox already correct, skipping");
+                    skipped++;
+                }
                 continue;
             }
 
@@ -151,8 +173,9 @@ public static class MailCommand
 
         Console.WriteLine();
         Console.WriteLine($"Mail system setup complete:");
-        Console.WriteLine($"  Created: {created} mailbox{(created == 1 ? "" : "es")}");
-        Console.WriteLine($"  Skipped: {skipped} (already exist)");
+        Console.WriteLine($"  Created:  {created} mailbox{(created == 1 ? "" : "es")}");
+        Console.WriteLine($"  Repaired: {repaired} mailbox{(repaired == 1 ? "" : "es")}");
+        Console.WriteLine($"  Skipped:  {skipped} (already correct)");
         Console.WriteLine($"  Total users: {users.Length}");
 
         return 0;

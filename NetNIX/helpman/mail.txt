@@ -8,6 +8,8 @@
             mail -r <number>
             mail -d <number>
             mail -s "<subject>" <user> [<user> ...]
+            mail --sent
+            mail --sent <number>
             mail --setup | --init
             mail -h | --help
 
@@ -44,6 +46,12 @@
             -s "Subject"     Send a new message. The subject must be
                              quoted if it contains spaces. One or more
                              recipient usernames must follow.
+
+            --sent           List the messages you have sent (your sent
+                             items archive at /var/mail/<user>.sent).
+
+            --sent N         Read sent message number N (as shown by
+                             --sent with no argument).
 
             --setup          Initialize the mail system by creating empty
             --init           mailboxes for all users with proper ownership
@@ -135,12 +143,48 @@
                 $ mail -d 1
                 mail: deleted message 1.
 
+        SENT MAIL
+            Every message you send is automatically copied into your
+            personal sent-items archive at:
+
+                /var/mail/<username>.sent
+
+            The archive is created on first send with permissions
+            rw------- so only you (and root) can read it. The format
+            mirrors the inbox but uses "=== To: ... ===" headers since
+            the sender is implicit.
+
+            This is useful when you want to review what you sent later,
+            or when an automated user (e.g. an nxagent daemon) sends
+            mail and you want a permanent log of every body it produced
+            without having to check each recipient's inbox.
+
+            List your sent items:
+
+                $ mail --sent
+                Sent items: /var/mail/alice.sent  (2 messages)
+                  N  To              Date                  Subject
+                  -  --              ----                  -------
+                   1 bob             2026-04-22T18:05:53Z  Hello there
+                   2 root, bob       2026-04-22T18:07:12Z  Status report
+
+            Read sent message 2:
+
+                $ mail --sent 2
+                To:      root, bob
+                Date:    2026-04-22T18:07:12Z
+                Subject: Status report
+                <body>
+
         FILES
             /var/mail/                Spool directory (sticky, world-
                                       writable - like /tmp).
             /var/mail/<username>      The mailbox file for <username>.
                                       Created on first delivery with
                                       permissions rw-rw-rw-.
+            /var/mail/<username>.sent The sent-items archive for
+                                      <username>. Created on first send
+                                      with permissions rw-------.
 
         OWNERSHIP
             The recommended way to set up mailboxes is to run:

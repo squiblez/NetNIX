@@ -88,11 +88,103 @@ public sealed class NixShell
     // —— Command dispatcher ———————————————————————————————————————————
 
     /// <summary>
-    /// Top-level input handler. Splits on unquoted pipe characters and
-    /// chains commands so that each command's stdout becomes the next
-    /// command's stdin — just like UNIX pipes.
+    /// Top-level input handler. Splits on unquoted '&amp;&amp;', '||',
+    /// and ';' connectors first, then for each segment splits on
+    /// unquoted '|' pipes and chains stdout-to-stdin between stages.
+    /// Honours <see cref="_lastExitCode"/> so that '&amp;&amp;' only
+    /// runs the next segment when the previous succeeded, and '||'
+    /// only runs it when the previous failed.
     /// </summary>
     private void ExecuteLine(string input)
+    {
+        var parts = SplitChained(input);
+        foreach (var (segment, connector) in parts)
+        {
+            if (connector == "&&" && _lastExitCode != 0) continue;
+            if (connector == "||" && _lastExitCode == 0) continue;
+            ExecutePipeline(segment.Trim());
+        }
+    }
+
+    /// <summary>
+    /// Tracks the exit code of the most recently executed script. Used
+    /// by ExecuteLine to evaluate '&amp;&amp;' / '||' chain operators.
+    /// Builtins do not currently set this; they are treated as always
+    /// succeeding (exit code 0).
+    /// </summary>
+    private int _lastExitCode = 0;
+
+    /// <summary>
+    /// Split <paramref name="input"/> on unquoted '&amp;&amp;', '||',
+    /// and ';' connectors. Returns each segment paired with the
+    /// connector that PRECEDED it (the very first segment uses an
+    /// empty connector).
+    /// </summary>
+    private static List<(string segment, string connector)> SplitChained(string input)
+    {
+        var result = new List<(string, string)>();
+        var sb = new StringBuilder();
+        bool inQuote = false;
+        char quoteChar = '"';
+        bool escape = false;
+        string pendingConnector = "";
+
+        for (int i = 0; i < input.Length; i++)
+        {
+            char c = input[i];
+
+            if (escape) { sb.Append(c); escape = false; continue; }
+            if (inQuote)
+            {
+                if (c == '\\' && quoteChar == '"') { sb.Append(c); escape = true; continue; }
+                sb.Append(c);
+                if (c == quoteChar) inQuote = false;
+                continue;
+            }
+            if (c == '"' || c == '\'')
+            {
+                inQuote = true;
+                quoteChar = c;
+                sb.Append(c);
+                continue;
+            }
+
+            // && / ||
+            if ((c == '&' || c == '|') && i + 1 < input.Length && input[i + 1] == c)
+            {
+                string conn = (c == '&') ? "&&" : "||";
+                result.Add((sb.ToString(), pendingConnector));
+                sb.Clear();
+                pendingConnector = conn;
+                i++; // consume the second char
+                continue;
+            }
+            // ;
+            if (c == ';')
+            {
+                result.Add((sb.ToString(), pendingConnector));
+                sb.Clear();
+                pendingConnector = ";";
+                continue;
+            }
+
+            sb.Append(c);
+        }
+
+        if (sb.Length > 0 || result.Count == 0)
+            result.Add((sb.ToString(), pendingConnector));
+
+        // Strip out empty segments produced by trailing connectors.
+        result.RemoveAll(p => string.IsNullOrWhiteSpace(p.Item1));
+        return result;
+    }
+
+    /// <summary>
+    /// Run a single command-line segment that may contain pipes. This
+    /// is the body of the original ExecuteLine and is invoked by the
+    /// new chain-aware ExecuteLine for each segment.
+    /// </summary>
+    private void ExecutePipeline(string input)
     {
         // Split input on unquoted '|'
         var segments = SplitPipes(input);
@@ -222,6 +314,12 @@ public sealed class NixShell
         string cmd = tokens[0];
         var args = tokens.Skip(1).ToList();
 
+        // Optimistically reset the exit code to success. The default
+        // case in the dispatcher overrides it for scripts (real exit
+        // code) and command-not-found (127); explicit builtins below
+        // do not currently signal failure, so they implicitly succeed.
+        _lastExitCode = 0;
+
         // Check for output redirection  (cmd > file  or  cmd >> file)
         string? redirectFile = null;
         bool appendMode = false;
@@ -289,7 +387,23 @@ public sealed class NixShell
                     if (!_scriptRunner.TryRunCommand(cmd, args, _currentUser, _cwd))
                     {
                         if (!TryRunShellScript(cmd, args))
+                        {
                             Out.WriteLine($"nsh: {cmd}: command not found");
+                            _lastExitCode = 127;
+                        }
+                        else
+                        {
+                            // Shell scripts ('.sh' interpreter loop) don't
+                            // currently propagate an exit code; treat as
+                            // success so chains keep flowing.
+                            _lastExitCode = 0;
+                        }
+                    }
+                    else
+                    {
+                        // Real .cs script ran - propagate its exit code so
+                        // 'cmd && next' / 'cmd || next' chain correctly.
+                        _lastExitCode = _scriptRunner.LastExitCode;
                     }
                     break;
             }
@@ -898,10 +1012,31 @@ public sealed class NixShell
         bool inQuote = false;
         char quoteChar = '"';
 
-        foreach (char c in input)
+        for (int i = 0; i < input.Length; i++)
         {
+            char c = input[i];
+
             if (inQuote)
             {
+                // Inside double quotes, recognise common backslash escapes
+                // so the agent's quoted C# source survives intact:
+                //   \"  -> "     \\ -> \     \n -> newline
+                //   \t  -> tab   \r -> CR
+                // Any other \x is left as the literal two characters.
+                // Single quotes remain fully literal (POSIX behaviour).
+                if (quoteChar == '"' && c == '\\' && i + 1 < input.Length)
+                {
+                    char next = input[i + 1];
+                    switch (next)
+                    {
+                        case '"': sb.Append('"'); i++; continue;
+                        case '\\': sb.Append('\\'); i++; continue;
+                        case 'n': sb.Append('\n'); i++; continue;
+                        case 't': sb.Append('\t'); i++; continue;
+                        case 'r': sb.Append('\r'); i++; continue;
+                    }
+                }
+
                 if (c == quoteChar)
                     inQuote = false;
                 else

@@ -37,12 +37,17 @@ public static class SessionIO
     /// Install the thread-aware Console wrappers. Call once at startup.
     /// Safe to call multiple times (idempotent).
     ///
-    /// NOTE: We intentionally do NOT replace Console.In/Console.Out globally
-    /// because .NET's Console wraps them in a SyncTextReader/SyncTextWriter
-    /// that holds a process-wide lock on ReadLine/Write — which would
-    /// serialize ALL sessions through a single lock. Instead, NixShell
-    /// reads/writes through SessionIO.In/Out directly, and ScriptRunner
-    /// temporarily redirects Console for each script invocation.
+    /// After Install(), Console.Out and Console.In automatically route
+    /// to the AsyncLocal session writers/readers configured by Enter()
+    /// on each thread. This means ANY Console.Write/ReadLine call - from
+    /// builtins, scripts, or library code - lands in the correct
+    /// session's stream without any per-call SetOut/SetIn dance.
+    ///
+    /// .NET's Console wraps our writer in a SyncTextWriter that holds
+    /// a lock per-Write call. That lock is brief (single character or
+    /// string write) and is the same locking pattern already used by
+    /// any code that touches Console concurrently - it is not held
+    /// across script execution and does NOT serialize sessions.
     /// </summary>
     public static void Install()
     {
@@ -51,34 +56,37 @@ public static class SessionIO
             if (_installed) return;
             _originalOut = Console.Out;
             _originalIn = Console.In;
+            // Install the thread-aware wrappers globally. From now on
+            // every Console.Write call routes through AsyncLocal to
+            // whichever session writer the calling thread set up via
+            // Enter(), or falls back to the original host console for
+            // threads that never entered a session (e.g. the local
+            // login loop in Program.Main).
+            Console.SetOut(new ThreadAwareWriter());
+            Console.SetIn(new ThreadAwareReader());
             _installed = true;
         }
     }
 
     /// <summary>
-    /// Temporarily redirect Console.In and Console.Out to the current
-    /// session's streams. Call before invoking a compiled script, and
-    /// call <see cref="RestoreConsole"/> (or use the returned IDisposable)
-    /// immediately after.  This is safe because each script runs
-    /// synchronously on its calling thread.
+    /// Historically this temporarily called Console.SetOut to point
+    /// the global Console.Out at the current session's writer, then
+    /// restored on Dispose. That mutated process-wide state and raced
+    /// across concurrent sessions - the agent and the local user could
+    /// see each other's script output.
+    ///
+    /// After Install() now wires a ThreadAwareWriter as Console.Out
+    /// directly, every Console.Write already routes per-thread via
+    /// AsyncLocal. So this method is now a no-op kept only for source
+    /// compatibility with existing call sites (notably ScriptRunner).
     /// </summary>
-    public static IDisposable RedirectConsoleForScript()
-    {
-        var prevOut = Console.Out;
-        var prevIn = Console.In;
-        var sessionOut = _threadOut.Value;
-        var sessionIn = _threadIn.Value;
-        if (sessionOut != null) Console.SetOut(sessionOut);
-        if (sessionIn != null) Console.SetIn(sessionIn);
-        return new ConsoleRestorer(prevOut, prevIn);
-    }
+    public static IDisposable RedirectConsoleForScript() => _noopRestorer;
 
-    private sealed class ConsoleRestorer : IDisposable
+    private static readonly IDisposable _noopRestorer = new NoopRestorer();
+
+    private sealed class NoopRestorer : IDisposable
     {
-        private readonly TextWriter _out;
-        private readonly TextReader _in;
-        public ConsoleRestorer(TextWriter o, TextReader i) { _out = o; _in = i; }
-        public void Dispose() { Console.SetOut(_out); Console.SetIn(_in); }
+        public void Dispose() { }
     }
 
     /// <summary>

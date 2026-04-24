@@ -1,0 +1,278 @@
+NXAGENT(8)                System Administration                NXAGENT(8)
+
+NAME
+    nxagent — autonomous AI agent daemon for NetNIX
+
+SYNOPSIS
+    daemon start nxagent /sbin/nxagent.cs
+    daemon stop  nxagent
+    daemon status nxagent
+
+DESCRIPTION
+    nxagent is a background daemon that drives an interactive nsh shell
+    session by feeding the captured terminal output to a KoboldCpp-
+    compatible AI and typing the AI's reply as the next shell command.
+    Operators steer the agent by sending mail to the agent user — every
+    message currently in the agent's mailbox is included in the prompt
+    sent to the AI on each turn.
+
+    The agent runs as a dedicated NetNIX user (default: nxagent), NOT as
+    root. It inherits that user's permissions, so anything you do not
+    want the AI to be able to do should not be granted to the agent
+    user. The kobold settings the daemon uses come from ROOT's config
+    (/root/.config/kobold.conf, edited by 'kobold --set' run as root)
+    or from explicit overrides in /etc/nxagent.conf — never from the
+    agent user's own kobold config. This means root can configure the
+    AI endpoint with one command without ever switching users.
+
+    All input fed to the shell, all output produced by the shell, every
+    prompt sent to the AI and every reply received are logged. Three
+    log streams are written by default - a tagged session transcript
+    (prompts + commands + replies), a plain shell transcript that reads
+    like a real session (prompts + commands + output interleaved), and
+    a daemon event log - each mirrored to both the VFS and the host
+    filesystem so operators have a complete audit trail.
+
+ARCHITECTURE
+    Internally the daemon spawns a real NixShell on its own thread with
+    custom I/O streams. A BlockingCollection acts as the shell's stdin;
+    a thread-safe StringBuilder acts as the shell's stdout. The main
+    daemon loop:
+
+      1. Waits for the shell to print its prompt
+      2. Drains the captured output and trims it to the most recent N
+         lines (configurable via prompt_history_lines)
+      3. Reads any directive messages from /var/mail/<agent_username>
+      4. Builds an AI prompt containing: system prompt + directives +
+         recent shell output + a request for the next command
+      5. Calls the kobold API for a one-line reply
+      6. Sanitises the reply (strips code fences, leading $) and feeds
+         it back to the shell as the next command
+      7. Sleeps command_delay seconds, then repeats
+
+    A small built-in blocklist refuses to feed obviously destructive
+    commands (rm -rf /, fork bombs, the secret reset login).
+
+SETUP
+    All steps below are run as root — no need to switch users.
+
+    1. Create the agent user (any name — nxagent is the convention):
+
+           # useradd nxagent
+           # passwd nxagent      (set a password — for human login only,
+                                  the daemon does not need it)
+
+    2. Initialise its mailbox so directives can be sent reliably:
+
+           # mail --setup
+
+    3. Configure the kobold endpoint. Two equally valid ways:
+
+       (a) As root, run kobold --set:
+
+               # kobold --set endpoint http://192.168.1.10:5001
+               # kobold --status     (verify the API is reachable)
+
+           This writes /root/.config/kobold.conf, which is exactly
+           what the daemon reads.
+
+       (b) Or set kobold_endpoint in /etc/nxagent.conf:
+
+               kobold_endpoint = http://192.168.1.10:5001
+
+           Values in /etc/nxagent.conf override (a) and always win.
+
+       (If your deployment requires an API key, also set
+       kobold_use_api_key = true and kobold_api_key = sk-... in
+       /etc/nxagent.conf, or run 'kobold --set use_api_key true' and
+       'kobold --set api_key sk-...' as root.)
+
+    4. (Optional) Tune any other settings in /etc/nxagent.conf — see
+       CONFIGURATION below.
+
+    5. Start the daemon (root only):
+
+           # daemon start nxagent /sbin/nxagent.cs
+           # daemon status nxagent
+
+    6. Send the agent a directive:
+
+           # mail -s "First directive" nxagent
+           Please cd to your home directory, list the files, then read
+           any new mail you receive.
+           .
+
+    Logging in as the agent user is only required if you want to use
+    the interactive 'kobold' chat command from that account, which is
+    not necessary for the daemon to work.
+
+CONFIGURATION
+    nxagent reads /etc/nxagent.conf at startup. The factory file is
+    installed by 'reinstall'. Settings:
+
+        agent_username        Local user the agent logs in as.
+                              Default: nxagent
+        command_delay         Seconds to wait between commands.
+                              Default: 5
+        prompt_history_lines  Max lines of the rolling shell history
+                              (across ALL turns since startup) included
+                              in each AI prompt. Default: 250.  The
+                              history grows as the agent issues more
+                              commands; this trims it to the most
+                              recent N lines so the AI sees its own
+                              past commands and their results, not just
+                              the most recent drain.
+        prompt_wait_seconds   Max seconds to wait for the shell prompt
+                              after a command. Default: 60
+        max_turns             Stop after this many turns; 0 = unlimited.
+                              Default: 0
+        terminal_width        Inner shell terminal width. Default: 100
+        terminal_height       Inner shell terminal height. Default: 40
+        consume_mail          When true, mailbox is emptied after each
+                              read. When false (default), directives
+                              persist until root deletes them with
+                              'mail -d'.
+        system_prompt_file    VFS path to a multi-line file whose
+                              contents become the system prompt.
+                              RECOMMENDED. Default: /etc/nxagent.prompt
+        system_prompt         Single-line fallback used only when
+                              system_prompt_file is blank or missing.
+        kobold_endpoint       Override KoboldCpp URL (blank = use the
+                              agent user's ~/.config/kobold.conf).
+        kobold_use_api_key    Set to 'true' to send Authorization header.
+        kobold_api_key        Bearer token sent when use_api_key is true.
+        kobold_max_length     Max tokens per AI reply (blank = default).
+        kobold_temperature    Sampling temperature 0.0-2.0 (blank =
+                              default).
+
+CUSTOMISING THE PROMPT
+    The agent's behaviour is governed by its system prompt. The factory
+    file at /etc/nxagent.prompt contains the recommended NetNIX-aware
+    prompt that lists the actual available commands and warns the AI
+    away from Linux-only flags and interactive programs. Edit it with:
+
+        # edit /etc/nxagent.prompt
+        # daemon stop nxagent
+        # daemon start nxagent /sbin/nxagent.cs
+
+    Changes take effect on the next daemon start. The prompt may be
+    as long as you like - it is loaded verbatim and prepended to every
+    AI request. To go back to the compiled-in default, blank both
+    system_prompt_file and system_prompt in /etc/nxagent.conf.
+        log_events            Log daemon events to VFS (default true).
+                              Writes to /var/log/nxagent.log
+        log_sessions          Log full transcript to VFS (default true).
+                              Writes to /var/log/nxagent/session.log
+        log_raw_shell         Log plain shell transcript to VFS
+                              (default true). Writes to
+                              /var/log/nxagent/shell.log
+        host_log_events       Log daemon events to host (default true).
+                              Writes to logs/nxagent.log
+        host_log_sessions     Log full transcript to host (default true).
+                              Writes to logs/nxagent-session.log
+        host_log_raw_shell    Log plain shell transcript to host
+                              (default true). Writes to
+                              logs/nxagent-shell.log
+
+DIRECTING THE AGENT
+    Send mail to the agent user from any account:
+
+        $ mail -s "Inventory" nxagent
+        Please walk /home and list each user's most recent file.
+        Email the result back to me when done.
+        .
+
+    The agent will see the message on its next turn and act on it.
+    Because the entire mailbox is included in every prompt, you can
+    queue several directives and the agent will handle them in order.
+    To clear old directives, root can run:
+
+        # mail -d N           (as the recipient, log in as nxagent first
+                               or use --consume_mail in the config)
+
+LOGS
+    VFS logs (root-only, view with 'cat' inside NetNIX):
+        /var/log/nxagent.log              daemon events
+        /var/log/nxagent/session.log      every AI prompt + reply +
+                                          extracted command, with
+                                          [TURN N TAG] markers and
+                                          ISO timestamps
+        /var/log/nxagent/shell.log        plain shell transcript -
+                                          prompts, commands and output
+                                          interleaved just like a real
+                                          terminal session, no markers,
+                                          no timestamps
+
+    Host logs (real files on the host filesystem):
+        logs/nxagent.log                  daemon events
+        logs/nxagent-session.log          tagged AI transcript
+        logs/nxagent-shell.log            plain shell transcript
+
+    The tagged session log is best for understanding what the AI was
+    thinking; the raw shell log is best for replaying what the agent
+    actually did from a user's point of view.
+
+    Disable individually with the six log_* flags in the config.
+
+REQUIREMENTS
+    * A reachable KoboldCpp (or compatible) API endpoint.
+    * The 'koboldlib' and 'settingslib' libraries (installed by
+      'reinstall').
+    * A non-root local user account dedicated to the agent.
+    * That user's mailbox initialised by 'mail --setup'.
+
+LIMITATIONS
+    * Interactive commands (edit, less, kobold's chat mode, etc.) will
+      hang because the agent has no way to send keystrokes to them.
+      The default system prompt warns the AI to avoid them; if the
+      agent runs one anyway the prompt_wait_seconds timeout recovers.
+    * The agent has no built-in concept of "tasks complete". It will
+      keep polling forever until 'daemon stop nxagent' is issued or
+      max_turns is reached.
+    * The agent's worldview is exactly what scrolls through the shell.
+      It cannot see graphical output or the contents of files it has
+      not opened.
+
+SECURITY
+    * The daemon refuses to feed a small blocklist of obviously
+      destructive commands (rm -rf /, fork bombs, __reset__).
+    * The agent always runs as the configured non-root user. To grant
+      it write access to a specific directory, chown that directory to
+      the agent user; do NOT add it to the sudo group unless you
+      really mean it.
+    * All AI prompts and shell sessions are logged in full. Treat the
+      log files as sensitive — they will contain whatever data the AI
+      reads while exploring the system.
+
+EXAMPLES
+    Start the daemon:
+        # daemon start nxagent /sbin/nxagent.cs
+
+    Check status:
+        # daemon status nxagent
+
+    Send a directive:
+        $ mail -s "Hello" nxagent
+        Please report your uname and current working directory.
+        .
+
+    Tail the live transcript on the host:
+        $ tail -f logs/nxagent-session.log     (host shell, AI view)
+        $ tail -f logs/nxagent-shell.log       (host shell, raw shell)
+
+    Tail the live transcript inside NetNIX:
+        # tail -f /var/log/nxagent/session.log
+        # tail -f /var/log/nxagent/shell.log
+
+    Re-point the agent at a different KoboldCpp server (root only,
+    no need to su to the agent user):
+        # edit /etc/nxagent.conf
+        (set kobold_endpoint, save, then restart the daemon)
+        # daemon stop nxagent
+        # daemon start nxagent /sbin/nxagent.cs
+
+    Stop the daemon:
+        # daemon stop nxagent
+
+SEE ALSO
+    daemon, daemon-writing, mail, kobold, koboldlib, telnetd, sandbox
