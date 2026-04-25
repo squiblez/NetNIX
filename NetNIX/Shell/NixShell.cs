@@ -320,6 +320,24 @@ public sealed class NixShell
         // do not currently signal failure, so they implicitly succeed.
         _lastExitCode = 0;
 
+        // ?? Heredoc handling (must run BEFORE redirect parsing) ?????
+        // Detect '<<DELIM' or '<<-DELIM' in the args. Collect body
+        // lines from the current input source until we read a line
+        // equal to DELIM, then make that body the command's stdin.
+        // '<<-' strips a leading tab from each body line. Quoting the
+        // delimiter ('<<"EOF"' or "<<'EOF'") is accepted (we already
+        // do not perform variable expansion in body lines, so quoting
+        // and unquoting are equivalent here).
+        string? heredocBody = HandleHeredocs(args);
+        TextReader? savedIn = null;
+        bool savedIsPiped = IsPiped;
+        if (heredocBody != null)
+        {
+            savedIn = In;
+            SessionIO.Enter(new StringReader(heredocBody), Out, _isRemote);
+            IsPiped = true;
+        }
+
         // Check for output redirection  (cmd > file  or  cmd >> file)
         string? redirectFile = null;
         bool appendMode = false;
@@ -475,7 +493,100 @@ public sealed class NixShell
                 try { Console.ResetColor(); } catch { }
                 Out.WriteLine($"nsh: redirect error: {ex.GetType().Name}: {ex.Message}");
             }
+
+            // Restore the input source if we hijacked it for a heredoc.
+            if (savedIn != null)
+            {
+                SessionIO.Enter(savedIn, Out, _isRemote);
+                IsPiped = savedIsPiped;
+            }
         }
+    }
+
+    /// <summary>
+    /// Detect heredoc redirection in the argument list and consume the
+    /// body from the current input source.
+    ///
+    /// Recognised forms:
+    ///   cmd ... &lt;&lt;DELIM        - body lines until a line equal to DELIM
+    ///   cmd ... &lt;&lt;-DELIM       - same, but a leading TAB is stripped from
+    ///                              every body line
+    ///   cmd ... &lt;&lt; "DELIM"     - quoted delimiter accepted (and ignored:
+    ///   cmd ... &lt;&lt; 'DELIM'      we do not perform variable expansion
+    ///                              on body lines anyway)
+    ///
+    /// On success the heredoc tokens are removed from <paramref name="args"/>
+    /// and the collected body text (terminated by the delimiter line) is
+    /// returned. Returns null if no heredoc operator is present.
+    ///
+    /// While collecting in an interactive session a "&gt; " continuation
+    /// prompt is written so the user knows the shell is waiting for body
+    /// lines. Non-interactive sources (Telnet, nxagent's queued reader,
+    /// pipes) get no prompt - they just feed lines.
+    /// </summary>
+    private string? HandleHeredocs(List<string> args)
+    {
+        for (int i = 0; i < args.Count; i++)
+        {
+            string tok = args[i];
+            bool stripTabs;
+            string? delim;
+
+            // Forms with delimiter glued on (<<EOF / <<-EOF) and forms
+            // with a separate delimiter token (<< EOF / <<- EOF).
+            if (tok.StartsWith("<<-") && tok.Length > 3)
+            {
+                stripTabs = true;
+                delim = tok.Substring(3);
+                args.RemoveAt(i);
+            }
+            else if (tok.StartsWith("<<") && tok.Length > 2 && tok != "<<-")
+            {
+                stripTabs = false;
+                delim = tok.Substring(2);
+                args.RemoveAt(i);
+            }
+            else if ((tok == "<<" || tok == "<<-") && i + 1 < args.Count)
+            {
+                stripTabs = (tok == "<<-");
+                delim = args[i + 1];
+                args.RemoveRange(i, 2);
+            }
+            else
+            {
+                continue;
+            }
+
+            // Strip surrounding quotes around the delimiter, if any.
+            if (delim.Length >= 2 &&
+                (delim[0] == '"' || delim[0] == '\'') &&
+                delim[delim.Length - 1] == delim[0])
+            {
+                delim = delim.Substring(1, delim.Length - 2);
+            }
+
+            bool interactive = !_isRemote
+                               && !Console.IsInputRedirected
+                               && !IsPiped;
+
+            var bodyBuf = new StringBuilder();
+            while (true)
+            {
+                if (interactive)
+                {
+                    Out.Write("> ");
+                    Out.Flush();
+                }
+                string? line = In.ReadLine();
+                if (line == null) break; // EOF before delimiter - accept partial
+                if (stripTabs && line.Length > 0 && line[0] == '\t')
+                    line = line.TrimStart('\t');
+                if (line == delim) break;
+                bodyBuf.Append(line).Append('\n');
+            }
+            return bodyBuf.ToString();
+        }
+        return null;
     }
 
     // —— Builtin commands ———————————————————————————————————————————

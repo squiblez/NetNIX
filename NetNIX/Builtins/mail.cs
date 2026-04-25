@@ -48,6 +48,32 @@ public static class MailCommand
         int sIdx = argList.IndexOf("-s");
         if (sIdx >= 0)
         {
+            // Optional pre-supplied body via -b / --body. Lets callers
+            // (especially the AI in nxagent, where multi-line interactive
+            // input is awkward) send a whole message in a single command:
+            //   mail -s "Hi" -b "line one\nline two" alice
+            // The literal escape \n becomes a real newline, \t becomes a
+            // tab, \\ becomes a single backslash. No other escapes.
+            string? preBody = null;
+            int bIdx = argList.IndexOf("-b");
+            if (bIdx < 0) bIdx = argList.IndexOf("--body");
+            if (bIdx >= 0)
+            {
+                if (bIdx + 1 >= argList.Count)
+                {
+                    Console.Error.WriteLine("mail: -b requires a body string");
+                    return 1;
+                }
+                preBody = argList[bIdx + 1]
+                    .Replace("\\\\", "\u0001")  // protect literal \\
+                    .Replace("\\n", "\n")
+                    .Replace("\\t", "\t")
+                    .Replace("\u0001", "\\");
+                argList.RemoveRange(bIdx, 2);
+                // -s index may have shifted if -b came before it.
+                sIdx = argList.IndexOf("-s");
+            }
+
             if (sIdx + 2 >= argList.Count)
             {
                 Console.Error.WriteLine("mail: -s requires a subject and at least one recipient");
@@ -61,7 +87,7 @@ public static class MailCommand
                 Console.Error.WriteLine("mail: unexpected arguments before -s: " + string.Join(' ', argList));
                 return 1;
             }
-            return SendMail(api, subject, recipients);
+            return SendMail(api, subject, recipients, preBody);
         }
 
         // Read message: -r N
@@ -183,7 +209,7 @@ public static class MailCommand
 
     // ?? Send ???????????????????????????????????????????????????????
 
-    private static int SendMail(NixApi api, string subject, List<string> recipients)
+    private static int SendMail(NixApi api, string subject, List<string> recipients, string? preBody = null)
     {
         // Validate recipients first
         var users = api.GetAllUsers();
@@ -195,14 +221,25 @@ public static class MailCommand
             return 1;
         }
 
-        // Read body from stdin until a single '.' on a line, or EOF.
-        Console.WriteLine("(Enter message body. End with a single '.' on a line, or EOF.)");
         var body = new StringBuilder();
-        string? line;
-        while ((line = Console.ReadLine()) != null)
+        if (preBody != null)
         {
-            if (line == ".") break;
-            body.AppendLine(line);
+            // Body provided inline via -b. Skip the interactive prompt
+            // entirely and use exactly what the caller supplied.
+            body.Append(preBody);
+            if (preBody.Length == 0 || preBody[preBody.Length - 1] != '\n')
+                body.Append('\n');
+        }
+        else
+        {
+            // Read body from stdin until a single '.' on a line, or EOF.
+            Console.WriteLine("(Enter message body. End with a single '.' on a line, or EOF.)");
+            string? line;
+            while ((line = Console.ReadLine()) != null)
+            {
+                if (line == ".") break;
+                body.AppendLine(line);
+            }
         }
 
         string from = api.Username;
@@ -446,12 +483,15 @@ public static class MailCommand
         Console.WriteLine("Usage:");
         Console.WriteLine("  mail                          List messages in your inbox");
         Console.WriteLine("  mail -r N                     Read message number N");
-        Console.WriteLine("  mail -d N                     Delete message number N");
-        Console.WriteLine("  mail -s \"Subject\" user [..]   Send a message");
-        Console.WriteLine("  mail --setup | --init         Initialize mailboxes for all users (root only)");
-        Console.WriteLine("  mail -h | --help              Show this help");
+        Console.WriteLine("  mail -d N                         Delete message number N");
+        Console.WriteLine("  mail -s \"Subject\" user [..]       Send a message (body via stdin / interactive)");
+        Console.WriteLine("  mail -s \"Subject\" -b \"body\" user  Send a message in ONE command");
+        Console.WriteLine("                                    (\\n becomes newline, \\t tab, \\\\ backslash)");
+        Console.WriteLine("  mail --setup | --init             Initialize mailboxes for all users (root only)");
+        Console.WriteLine("  mail -h | --help                  Show this help");
         Console.WriteLine();
-        Console.WriteLine("When sending, type the body and end with a single '.' on a line.");
+        Console.WriteLine("Interactive send: type the body and end with a single '.' on a line.");
+        Console.WriteLine("Inline send (-b): handy for scripts and the AI agent - no interactive input needed.");
         Console.WriteLine("See 'man mail' for full documentation.");
     }
 }

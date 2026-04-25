@@ -8,6 +8,7 @@
             mail -r <number>
             mail -d <number>
             mail -s "<subject>" <user> [<user> ...]
+            mail -s "<subject>" -b "<body>" <user> [<user> ...]
             mail --sent
             mail --sent <number>
             mail --setup | --init
@@ -45,7 +46,20 @@
 
             -s "Subject"     Send a new message. The subject must be
                              quoted if it contains spaces. One or more
-                             recipient usernames must follow.
+                             recipient usernames must follow. By default
+                             the body is read from stdin (terminate
+                             with a single '.' on a line).
+
+            -b "Body"        Provide the message body inline as a single
+            --body "Body"    argument so the entire send fits in ONE
+                             command. Skips the interactive body prompt.
+                             Recognised escapes inside the body string:
+                                 \n   newline
+                                 \t   tab
+                                 \\   literal backslash
+                             Intended for scripts and the AI agent
+                             (nxagent), where multi-line interactive
+                             input is awkward.
 
             --sent           List the messages you have sent (your sent
                              items archive at /var/mail/<user>.sent).
@@ -116,6 +130,25 @@
 
             Each recipient receives an independent copy in their own
             mailbox.
+
+            For scripts, automation, and the AI agent, the inline form
+            with -b sends the entire message in a single command and
+            avoids the multi-line interactive prompt:
+
+                $ mail -s "Lunch?" -b "Hi Alice,\nNoon at the cafe?\n-- bob" alice
+                mail: delivered to 1 recipient.
+                mail: archived in /var/mail/bob.sent (view with 'mail --sent')
+
+            Inside the -b argument these escapes are recognised:
+                \n   newline
+                \t   tab
+                \\   literal backslash
+            Everything else is taken verbatim, so quoted code, JSON,
+            paths, etc. all pass through unchanged.
+
+            Both forms behave identically once delivered - the recipient
+            cannot tell whether you typed the body interactively or
+            supplied it via -b.
 
         READING
             Run mail with no arguments to see a numbered list:

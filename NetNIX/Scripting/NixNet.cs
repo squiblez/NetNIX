@@ -5,6 +5,8 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 You should have received a copy of the GNU General Public License along with this program. If not, see gnu.org
 */
 using System.Net;
+using System.Net.Http;
+using System.Net.Sockets;
 using System.Text;
 
 namespace NetNIX.Scripting;
@@ -233,15 +235,20 @@ public sealed class NixNet
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            using var client = CreateLongPollClient(timeoutSeconds);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var content = new StringContent(body, Encoding.UTF8, contentType);
-            using var response = client.PostAsync(url, content).GetAwaiter().GetResult();
+            using var response = client.PostAsync(url, content, cts.Token).GetAwaiter().GetResult();
             response.EnsureSuccessStatusCode();
-            return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return response.Content.ReadAsStringAsync(cts.Token).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"net: POST {url}: {ex.Message}");
+            // Include exception type so the operator can distinguish a
+            // genuine network issue from a timeout from a server-side
+            // refusal. Walk the inner-exception chain because HttpClient
+            // typically wraps the real cause.
+            Console.Error.WriteLine($"net: POST {url}: {DescribeException(ex)}");
             return null;
         }
     }
@@ -255,7 +262,8 @@ public sealed class NixNet
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+            using var client = CreateLongPollClient(timeoutSeconds);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             var request = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = new StringContent(body, Encoding.UTF8, contentType)
@@ -263,15 +271,118 @@ public sealed class NixNet
             foreach (var (name, value) in headers)
                 request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = client.SendAsync(request).GetAwaiter().GetResult();
+            using var response = client.SendAsync(request, cts.Token).GetAwaiter().GetResult();
             response.EnsureSuccessStatusCode();
-            return response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            return response.Content.ReadAsStringAsync(cts.Token).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"net: POST {url}: {ex.Message}");
+            Console.Error.WriteLine($"net: POST {url}: {DescribeException(ex)}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Format an exception (and the most relevant inner exception) into
+    /// a single-line description. HttpClient typically wraps the real
+    /// cause one or two layers deep, so showing only the outer message
+    /// often hides the answer ("An error occurred while sending the
+    /// request" vs the actual "Connection was aborted by remote host").
+    /// </summary>
+    private static string DescribeException(Exception ex)
+    {
+        var sb = new StringBuilder();
+        sb.Append(ex.GetType().Name).Append(": ").Append(ex.Message);
+        var inner = ex.InnerException;
+        int depth = 0;
+        while (inner != null && depth < 3)
+        {
+            sb.Append(" -> ").Append(inner.GetType().Name).Append(": ").Append(inner.Message);
+            inner = inner.InnerException;
+            depth++;
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Build an HttpClient suited to long-polling API calls (kobold,
+    /// LLM endpoints, etc.). The HttpClient.Timeout enforces the
+    /// outer request budget, but the underlying socket is also wired
+    /// for TCP keepalive so a HALF-OPEN connection (server crashed
+    /// after accepting the request, NAT silently dropped state, switch
+    /// reset the link, etc.) is detected within ~60 seconds rather
+    /// than blocking the caller for the full request timeout.
+    ///
+    /// Symptom this fixes: kobold logs "response sent" but the daemon
+    /// never receives it because a previous failure left the network
+    /// path in a bad state; without keepalive the OS never notices the
+    /// dead connection and the read blocks until the 30-minute outer
+    /// timeout fires.
+    /// </summary>
+    private static HttpClient CreateLongPollClient(int timeoutSeconds)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            // Refuse to reuse a connection older than 5 minutes - keeps
+            // pooled connections from accumulating subtle state issues
+            // across long agent sessions.
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            // Drop idle connections quickly. We only ever issue one
+            // request at a time, so there is no benefit to keeping a
+            // pool warm and a real cost to reusing a stale socket.
+            PooledConnectionIdleTimeout = TimeSpan.FromSeconds(15),
+            // Fail fast if the endpoint is unreachable rather than
+            // burning the full request timeout on TCP retries.
+            ConnectTimeout = TimeSpan.FromSeconds(30),
+            // HTTP/2 keepalive ping (no-op on HTTP/1.1 but harmless).
+            KeepAlivePingPolicy = HttpKeepAlivePingPolicy.Always,
+            KeepAlivePingDelay = TimeSpan.FromMinutes(2),
+            KeepAlivePingTimeout = TimeSpan.FromSeconds(30),
+            // Socket-level TCP keepalive. CRITICAL TUNING: kobold (and
+            // most non-streaming LLM endpoints) send NO bytes back
+            // while generating. From TCP's point of view the socket is
+            // "idle" for the entire generation time, which can be many
+            // minutes. If our keepalive fires too eagerly we will kill
+            // perfectly healthy connections in the middle of valid
+            // long generations.
+            //
+            // Conservative settings: probe after 5 minutes of silence,
+            // every 30 seconds, up to 6 times - so a genuinely dead
+            // connection is detected in roughly 8 minutes (5 + 6*30s),
+            // but generations of up to ~5 minutes are unaffected by
+            // keepalive at all.
+            ConnectCallback = async (context, ct) =>
+            {
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    socket.SetSocketOption(SocketOptionLevel.Socket,
+                        SocketOptionName.KeepAlive, true);
+                    // Some OSes do not expose the per-connection knobs,
+                    // so guard each one - we still get coarse keepalive
+                    // even if the fine-tuning calls are not supported.
+                    try { socket.SetSocketOption(SocketOptionLevel.Tcp,
+                        SocketOptionName.TcpKeepAliveTime, 300); } catch { }   // 5 min idle before probe
+                    try { socket.SetSocketOption(SocketOptionLevel.Tcp,
+                        SocketOptionName.TcpKeepAliveInterval, 30); } catch { }  // 30s between probes
+                    try { socket.SetSocketOption(SocketOptionLevel.Tcp,
+                        SocketOptionName.TcpKeepAliveRetryCount, 6); } catch { } // 6 failed probes -> abort
+
+                    await socket.ConnectAsync(context.DnsEndPoint, ct).ConfigureAwait(false);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            },
+        };
+
+        return new HttpClient(handler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+        };
     }
 }
 

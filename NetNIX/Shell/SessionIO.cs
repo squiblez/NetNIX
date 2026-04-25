@@ -29,6 +29,7 @@ public static class SessionIO
     private static readonly AsyncLocal<int> _termHeight = new();
 
     private static TextWriter? _originalOut;
+    private static TextWriter? _originalErr;
     private static TextReader? _originalIn;
     private static bool _installed;
     private static readonly object _installLock = new();
@@ -37,11 +38,12 @@ public static class SessionIO
     /// Install the thread-aware Console wrappers. Call once at startup.
     /// Safe to call multiple times (idempotent).
     ///
-    /// After Install(), Console.Out and Console.In automatically route
-    /// to the AsyncLocal session writers/readers configured by Enter()
-    /// on each thread. This means ANY Console.Write/ReadLine call - from
-    /// builtins, scripts, or library code - lands in the correct
-    /// session's stream without any per-call SetOut/SetIn dance.
+    /// After Install(), Console.Out, Console.Error and Console.In all
+    /// automatically route to the AsyncLocal session writers/readers
+    /// configured by Enter() on each thread. This means ANY
+    /// Console.Write/Error.WriteLine/ReadLine call - from builtins,
+    /// scripts, libraries, or networking helpers - lands in the
+    /// correct session's stream without any per-call SetOut/SetIn dance.
     ///
     /// .NET's Console wraps our writer in a SyncTextWriter that holds
     /// a lock per-Write call. That lock is brief (single character or
@@ -55,6 +57,7 @@ public static class SessionIO
         {
             if (_installed) return;
             _originalOut = Console.Out;
+            _originalErr = Console.Error;
             _originalIn = Console.In;
             // Install the thread-aware wrappers globally. From now on
             // every Console.Write call routes through AsyncLocal to
@@ -62,7 +65,14 @@ public static class SessionIO
             // Enter(), or falls back to the original host console for
             // threads that never entered a session (e.g. the local
             // login loop in Program.Main).
+            //
+            // Console.Error is routed to the SAME session writer as
+            // stdout. Sessions in NetNIX (Telnet, nxagent capture,
+            // local terminal) all merge stdout and stderr into a
+            // single output stream the user sees - mirroring how a
+            // real interactive terminal displays them interleaved.
             Console.SetOut(new ThreadAwareWriter());
+            Console.SetError(new ThreadAwareErrorWriter());
             Console.SetIn(new ThreadAwareReader());
             _installed = true;
         }
@@ -259,6 +269,38 @@ public static class SessionIO
         public override Encoding Encoding => Encoding.UTF8;
 
         private TextWriter Target => _threadOut.Value ?? _originalOut!;
+
+        public override void Write(char value) => Target.Write(value);
+        public override void Write(string? value) => Target.Write(value);
+        public override void Write(char[] buffer, int index, int count) => Target.Write(buffer, index, count);
+        public override void WriteLine() => Target.WriteLine();
+        public override void WriteLine(string? value) => Target.WriteLine(value);
+        public override void Flush() => Target.Flush();
+
+        public override Task WriteAsync(char value) => Target.WriteAsync(value);
+        public override Task WriteAsync(string? value) => Target.WriteAsync(value);
+        public override Task WriteLineAsync(string? value) => Target.WriteLineAsync(value);
+        public override Task FlushAsync() => Target.FlushAsync();
+    }
+
+    /// <summary>
+    /// Thread-aware replacement for Console.Error. Routes stderr to the
+    /// SAME per-thread session writer as stdout - real interactive
+    /// terminals display stdout and stderr interleaved on the same
+    /// stream, and NetNIX sessions (Telnet, nxagent capture, local
+    /// shell) treat them as a single output stream the user sees.
+    /// Falls back to the captured original stderr on non-session
+    /// threads (e.g. the host main thread before login).
+    ///
+    /// Crucially this prevents library code (NixNet's HTTP error
+    /// reporting, etc.) from leaking diagnostics about one session
+    /// into another session's terminal.
+    /// </summary>
+    private sealed class ThreadAwareErrorWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        private TextWriter Target => _threadOut.Value ?? _originalErr!;
 
         public override void Write(char value) => Target.Write(value);
         public override void Write(string? value) => Target.Write(value);

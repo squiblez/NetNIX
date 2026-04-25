@@ -144,6 +144,29 @@ CONFIGURATION
         kobold_max_length     Max tokens per AI reply (blank = default).
         kobold_temperature    Sampling temperature 0.0-2.0 (blank =
                               default).
+        kobold_generate_timeout_seconds
+                              Per-request timeout for the kobold
+                              /api/v1/generate call. Default: 1800
+                              (30 min). Slow self-hosted models on
+                              modest hardware regularly exceed the
+                              koboldlib default of 120s, which is why
+                              the daemon overrides it here.
+        kobold_heartbeat_seconds
+                              Interval at which the daemon logs a
+                              "still waiting for response" line while
+                              blocked on a slow AI response. Lines go
+                              to /var/log/nxagent.log and the host
+                              logs/nxagent.log. Default: 120 (every 2
+                              minutes). Set to 0 to disable.
+        kobold_retry_delays_seconds
+                              Progressive backoff (comma-separated
+                              seconds) for AI/network failures. The
+                              Nth consecutive failure waits the Nth
+                              value before retrying; the last value is
+                              reused for failures beyond the list.
+                              Default: 5,15,30,60 - a one-off blip
+                              costs only 5s, sustained outages back
+                              off automatically.
 
 CUSTOMISING THE PROMPT
     The agent's behaviour is governed by its system prompt. The factory

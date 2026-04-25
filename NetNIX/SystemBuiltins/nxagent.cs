@@ -64,6 +64,24 @@ public static class NxAgentDaemon
         public int KoboldMaxLength = 0;
         public double KoboldTemperature = 0;
         public bool KoboldTemperatureSet = false;
+        // How long (in seconds) the daemon is willing to wait for a
+        // single kobold /api/v1/generate response. Self-hosted models
+        // running large prompts on slow hardware can easily take many
+        // minutes per turn, so the default is intentionally generous.
+        public int KoboldGenerateTimeoutSeconds = 1800; // 30 minutes
+        // How often (in seconds) to log a progress line while waiting
+        // on a slow kobold response. Set to 0 to disable heartbeats.
+        // 120s by default so the operator notices a long-running
+        // request quickly; raise it (e.g. to 600) for chatty logs on
+        // models that routinely take many minutes per reply.
+        public int KoboldHeartbeatSeconds = 120;        // 2 minutes
+        // Progressive backoff sequence (in seconds) for AI/network
+        // failures. The Nth consecutive failure waits the Nth entry
+        // before retrying; once we run off the end of the list we keep
+        // using the last value. Default {5, 15, 30, 60} - a one-off
+        // glitch costs only 5 seconds, but a sustained outage backs
+        // off so we are not hammering a dead endpoint.
+        public int[] KoboldRetryDelaysSeconds = new[] { 5, 15, 30, 60 };
         public string SystemPrompt =
             "You are an autonomous AI operator running inside NetNIX, a custom " +
             "UNIX-like environment built on .NET 8. NetNIX is NOT Linux. Many " +
@@ -188,6 +206,23 @@ public static class NxAgentDaemon
                             cfg.KoboldTemperatureSet = true;
                         }
                         break;
+                    case "kobold_generate_timeout_seconds":
+                        if (int.TryParse(val, out int kgts) && kgts > 0)
+                            cfg.KoboldGenerateTimeoutSeconds = kgts;
+                        break;
+                    case "kobold_heartbeat_seconds":
+                        if (int.TryParse(val, out int khb) && khb >= 0)
+                            cfg.KoboldHeartbeatSeconds = khb;
+                        break;
+                    case "kobold_retry_delays_seconds":
+                        // Comma-separated list of integers, e.g. "5,15,30,60".
+                        var parts = val.Split(',', StringSplitOptions.RemoveEmptyEntries
+                            | StringSplitOptions.TrimEntries);
+                        var parsed = new List<int>();
+                        foreach (var p in parts)
+                            if (int.TryParse(p, out int n) && n >= 0) parsed.Add(n);
+                        if (parsed.Count > 0) cfg.KoboldRetryDelaysSeconds = parsed.ToArray();
+                        break;
                     case "log_events":
                         cfg.LogEvents = val.Equals("true", StringComparison.OrdinalIgnoreCase);
                         break;
@@ -236,6 +271,14 @@ public static class NxAgentDaemon
     private const int RepeatWarnThreshold     = 2; // 2nd repeat -> nudge
     private const int RepeatBlockThreshold    = 3; // 3rd repeat -> skip + strong nudge
     private const int RepeatEscalateThreshold = 5; // 5th repeat -> mail root once
+
+    // Consecutive AI / network failures. Helps the operator distinguish
+    // a one-off blip (model swapped, brief net glitch) from a sustained
+    // outage that needs attention. Reset to 0 on the next successful
+    // turn; mail root once the threshold is crossed.
+    private static int _consecutiveFailures = 0;
+    private static bool _failureAlertSent = false;
+    private const int FailureAlertThreshold = 5;
 
     public static int Daemon(NixApi api, string[] args)
     {
@@ -394,7 +437,16 @@ public static class NxAgentDaemon
                 break;
             }
 
-            turn++;
+            // Wrap the entire turn body so that NO unhandled exception
+            // can silently kill the daemon thread. Anything that escapes
+            // the inner try blocks (a bad string operation, an HTTP
+            // library throwing during an interleaved write to a host
+            // stream, an OOM during prompt building, etc.) is caught
+            // at the bottom of the loop, logged with full type/message/
+            // stack, and the loop continues after a short backoff.
+            try
+            {
+                turn++;
 
             // Collect operator directives from mail.
             string directives = ReadMailDirectives(agentApi);
@@ -413,21 +465,109 @@ public static class NxAgentDaemon
             string prompt = BuildAgentPrompt(_config.SystemPrompt, directives, historyTail, turn);
             LogSession(api, "[TURN " + turn + " PROMPT]\n" + prompt);
 
+            // Self-hosted models on slow hardware can take many minutes
+            // per response. Use the configured generate timeout (default
+            // 30 min) and run a heartbeat thread that logs every
+            // KoboldHeartbeatSeconds so the operator can see the agent
+            // is alive and waiting, not crashed.
             string reply = null;
-            try { reply = kobold.Generate(prompt); }
+            var generateDone = new ManualResetEventSlim(false);
+            var generateStart = DateTime.UtcNow;
+            int turnSnapshot = turn;
+            Thread heartbeat = null;
+            if (_config.KoboldHeartbeatSeconds > 0)
+            {
+                heartbeat = new Thread(() =>
+                {
+                    var interval = TimeSpan.FromSeconds(_config.KoboldHeartbeatSeconds);
+                    while (!generateDone.Wait(interval))
+                    {
+                        int mins = (int)(DateTime.UtcNow - generateStart).TotalMinutes;
+                        LogEvent(api, "kobold: still waiting for response after " + mins
+                            + "m (turn " + turnSnapshot + ", limit "
+                            + (_config.KoboldGenerateTimeoutSeconds / 60) + "m)");
+                    }
+                })
+                { IsBackground = true, Name = "nxagent-kobold-heartbeat" };
+                heartbeat.Start();
+            }
+
+            // Visible "request started" line so the operator can see in
+            // /var/log/nxagent.log (and on the host log) the moment each
+            // kobold call begins. Without this, a slow generation looks
+            // indistinguishable from a wedged daemon.
+            LogEvent(api, "kobold: sending prompt for turn " + turn
+                + " (" + prompt.Length + " chars, timeout "
+                + _config.KoboldGenerateTimeoutSeconds + "s)");
+
+            try { reply = kobold.GenerateWithTimeout(prompt, _config.KoboldGenerateTimeoutSeconds); }
             catch (Exception ex) { LogEvent(api, "kobold error: " + ex.Message); }
+            finally
+            {
+                generateDone.Set();
+                heartbeat?.Join(TimeSpan.FromSeconds(2));
+            }
+
+            // Pair the "sending" line with a "received" line so timings
+            // are visible at a glance.
+            int elapsedSec = (int)(DateTime.UtcNow - generateStart).TotalSeconds;
+            if (reply != null)
+                LogEvent(api, "kobold: received reply for turn " + turn
+                    + " (" + reply.Length + " chars, took " + elapsedSec + "s)");
+            else
+                LogEvent(api, "kobold: NO reply for turn " + turn
+                    + " (gave up after " + elapsedSec + "s)");
 
             if (string.IsNullOrWhiteSpace(reply))
             {
-                LogEvent(api, "no response from AI on turn " + turn + ", sleeping 30s");
-                if (token.WaitHandle.WaitOne(30000)) break;
+                _consecutiveFailures++;
+                // Pick the Nth backoff (1-indexed), clamping to the last
+                // entry once we run off the end. So with default
+                // {5, 15, 30, 60}: failure 1 -> 5s, 2 -> 15s, 3 -> 30s,
+                // 4 and beyond -> 60s.
+                int[] delays = _config.KoboldRetryDelaysSeconds;
+                int delaySec = delays[Math.Min(_consecutiveFailures, delays.Length) - 1];
+                LogEvent(api, "no response from AI on turn " + turn
+                    + ", sleeping " + delaySec + "s (consecutive failures: "
+                    + _consecutiveFailures + ")");
+                AppendHistory(api, "nxagent: no response from AI on turn " + turn
+                    + " (kobold returned empty or timed out, sleeping " + delaySec + "s)\n");
+
+                // Escalate once when the network / model has been failing
+                // for several turns in a row. Daemon keeps trying so it
+                // recovers automatically once kobold comes back; the
+                // mail just makes sure the operator knows.
+                if (_consecutiveFailures >= FailureAlertThreshold && !_failureAlertSent)
+                {
+                    SendFailureAlert(agentApi, _consecutiveFailures);
+                    _failureAlertSent = true;
+                }
+
+                if (token.WaitHandle.WaitOne(delaySec * 1000)) break;
                 continue;
+            }
+
+            // Got a real reply - reset the failure counter so the next
+            // failure starts a fresh streak.
+            if (_consecutiveFailures > 0)
+            {
+                LogEvent(api, "AI responded again after " + _consecutiveFailures
+                    + " consecutive failure(s)");
+                _consecutiveFailures = 0;
+                _failureAlertSent = false;
             }
 
             string command = ExtractCommand(reply);
             if (command.Length == 0)
             {
                 LogSession(api, "[TURN " + turn + " EMPTY-REPLY]\n" + reply);
+                // Surface in shell.log too. Truncate and flatten newlines
+                // so it stays readable in the transcript view.
+                string snippet = reply.Replace("\r", "").Replace("\n", " | ").Trim();
+                if (snippet.Length > 200) snippet = snippet.Substring(0, 200) + "...";
+                if (snippet.Length == 0) snippet = "<blank>";
+                AppendHistory(api, "nxagent: AI reply produced no executable command on turn "
+                    + turn + " (raw reply: " + snippet + ")\n");
                 if (token.WaitHandle.WaitOne(_config.CommandDelaySeconds * 1000)) break;
                 continue;
             }
@@ -456,9 +596,12 @@ public static class NxAgentDaemon
             if (_commandRepeatCount >= RepeatBlockThreshold)
             {
                 // Hard stop: do NOT actually run the command again.
-                // Inject a strong nudge into the rolling history so the
-                // AI sees the warning on its next turn and (hopefully)
+                // Log the rejected command first so shell.log records
+                // EVERY AI attempt (the operator explicitly needs to
+                // see them all), then inject a strong nudge so the AI
+                // sees the warning on its next turn and (hopefully)
                 // changes course.
+                AppendHistory(api, command + "\n");
                 string nudge = "nxagent: BLOCKED - you have issued '" + normalized + "' "
                     + _commandRepeatCount + " times in a row. The output is identical each time, "
                     + "which means the shell silently accepted the line but did nothing useful. "
@@ -529,6 +672,19 @@ public static class NxAgentDaemon
             if (delayMs > 0)
             {
                 if (token.WaitHandle.WaitOne(delayMs)) break;
+            }
+            }
+            catch (Exception ex)
+            {
+                LogEvent(api, "turn " + turn + " crashed: " + ex.GetType().Name
+                    + ": " + ex.Message);
+                LogSession(api, "[TURN " + turn + " CRASHED]\n"
+                    + ex.GetType().FullName + ": " + ex.Message + "\n" + ex.StackTrace);
+                AppendHistory(api, "nxagent: turn " + turn + " crashed ("
+                    + ex.GetType().Name + ": " + ex.Message
+                    + "). Daemon recovering and continuing.\n");
+                // Short backoff so a crash loop does not spin the CPU.
+                if (token.WaitHandle.WaitOne(5000)) break;
             }
         }
 
@@ -610,8 +766,40 @@ public static class NxAgentDaemon
     }
 
     /// <summary>
+    /// Notify root that the AI / kobold endpoint has been unresponsive
+    /// for several consecutive turns. Best-effort: failures are
+    /// swallowed so the alerting path itself can never crash the
+    /// daemon.
+    /// </summary>
+    private static void SendFailureAlert(NixApi agentApi, int failures)
+    {
+        try
+        {
+            const string mboxRoot = "/var/mail/root";
+            string date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            string entry =
+                "=== From: " + agentApi.Username +
+                "  Date: " + date +
+                "  Subject: nxagent: " + failures + " consecutive AI failures ===\n" +
+                "My last " + failures + " turns received no response from the configured " +
+                "kobold endpoint (timeout, network error, or empty reply). The daemon " +
+                "is still alive and will keep retrying every 30 seconds; once kobold " +
+                "returns a real reply this counter resets and you will see a " +
+                "\"AI responded again\" line in /var/log/nxagent.log.\n\n" +
+                "If you do NOT see successful turns soon, check:\n" +
+                "  - the kobold endpoint URL in nxagent's user config\n" +
+                "  - that the model server is reachable from this host\n" +
+                "  - logs/nxagent.log on the host for repeated 'kobold error' lines\n";
+            if (agentApi.IsFile(mboxRoot))
+                agentApi.AppendText(mboxRoot, entry);
+            agentApi.Save();
+        }
+        catch { /* best-effort - never let alerting kill the daemon */ }
+    }
+
+    /// <summary>
     /// Append an alert to root's mailbox notifying the operator that
-    /// the agent is stuck repeating the same command. Uses the agent
+    /// the agent is stuck repeating the same command.
     /// user's NixApi (delivery to /var/mail/root works because that
     /// file is rw-rw-rw- by mail --setup convention). Best-effort -
     /// any failure is swallowed so loop-detection itself never crashes
